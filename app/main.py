@@ -23,12 +23,8 @@ from app.config import get_settings
 from app.logging_config import configure_logging
 from app.models import QueryRequest, QueryResponse
 from app.stats import Stats
-from app.tiers.base import (
-    TierNotAvailable,
-    estimate_cost,
-    estimate_tokens,
-    get_tier,
-)
+from app.tiers.base import TierNotAvailable, TierUpstreamError, estimate_cost, estimate_tokens
+from app.tiers.registry import TierRegistry, build_registry
 
 log = logging.getLogger("gateway")
 
@@ -48,6 +44,7 @@ async def lifespan(app: FastAPI):
         schema_version=settings.cache_schema_version,
     )
     app.state.stats = Stats(started_at=time.time())
+    app.state.tiers = build_registry(settings)
 
     log.info(
         "gateway.startup",
@@ -61,6 +58,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await app.state.tiers.aclose()
         await redis.aclose()
         log.info("gateway.shutdown")
 
@@ -74,6 +72,16 @@ async def tier_not_available(request: Request, exc: TierNotAvailable) -> JSONRes
     log.warning("tier.unavailable", extra={"error": str(exc)})
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(TierUpstreamError)
+async def tier_upstream_failed(request: Request, exc: TierUpstreamError) -> JSONResponse:
+    """An upstream model provider failed. That is a bad gateway, not a bug."""
+    log.error("tier.upstream_failed", extra={"error": str(exc)})
+    return JSONResponse(
+        status_code=status.HTTP_502_BAD_GATEWAY,
         content={"detail": str(exc)},
     )
 
@@ -118,7 +126,6 @@ async def scale_metric(request: Request) -> dict:
 
 @app.post("/query", response_model=QueryResponse)
 async def query(payload: QueryRequest, request: Request) -> QueryResponse:
-    settings = request.app.state.settings
     cache: Cache = request.app.state.cache
     st: Stats = request.app.state.stats
 
@@ -157,8 +164,8 @@ async def query(payload: QueryRequest, request: Request) -> QueryResponse:
 
         st.record_miss()
         decision = rules.classify(payload.prompt)
-        tier = get_tier(decision.tier, mock=settings.mock_tiers)
-        result = await tier.complete(payload.prompt)
+        registry: TierRegistry = request.app.state.tiers
+        result = await registry.get(decision.tier).complete(payload.prompt)
         await cache.set(payload.prompt, result)
         st.record_dispatch(result)
 

@@ -94,13 +94,8 @@ class MockTier(Tier):
 
 
 class TierNotAvailable(RuntimeError):
-    """Raised when a live tier is requested but not yet implemented."""
+    """Raised when a tier is requested but not configured or available."""
 
 
-def get_tier(name: TierName, *, mock: bool) -> Tier:
-    if mock:
-        return MockTier(name)
-    raise TierNotAvailable(
-        f"Live tier {name.value!r} is not implemented yet (Ring 1). "
-        "Set MOCK_TIERS=true to run without credentials."
-    )
+class TierUpstreamError(RuntimeError):
+    """Raised when a live tier's upstream provider fails."""

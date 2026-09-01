@@ -13,9 +13,32 @@ services:
         limits:
           memory: 256M
 
+  # Optional containerized Ollama, for Linux and CI.
+  #   docker compose --profile with-ollama up -d
+  #   OLLAMA_URL=http://ollama:11434
+  #
+  # Not the default on macOS: Docker Desktop gives containers no Metal access,
+  # so a containerized Ollama runs on CPU and is far slower than the host
+  # install. The local tier is supposed to be the fast one.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["with-ollama"]
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+
   gateway:
     build: .
-    # Ring 0 has no load balancer, so the gateway is the entry point and
+    # Ring 0/1 have no load balancer, so the gateway is the entry point and
     # publishes a host port. Phase 2 removes this block: once the balancer
     # fronts N replicas, only the balancer may publish, or `--scale gateway=3`
     # collides on the port.
@@ -25,11 +48,19 @@ services:
       MOCK_TIERS: "${MOCK_TIERS:-true}"
       REDIS_URL: "redis://redis:6379/0"
       OLLAMA_URL: "${OLLAMA_URL:-http://host.docker.internal:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.2:3b}"
+      OLLAMA_TIMEOUT_SECONDS: "${OLLAMA_TIMEOUT_SECONDS:-120}"
       CACHE_TTL_SECONDS: "${CACHE_TTL_SECONDS:-3600}"
       CACHE_SCHEMA_VERSION: "${CACHE_SCHEMA_VERSION:-v1}"
       CLASSIFIER: "${CLASSIFIER:-rules}"
+      MAX_TOKENS: "${MAX_TOKENS:-1024}"
+      SONNET_THINKING: "${SONNET_THINKING:-adaptive}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    # Lets the container reach a host-run Ollama on Linux too; Docker Desktop
+    # provides host.docker.internal natively.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy
@@ -37,3 +68,6 @@ services:
       resources:
         limits:
           memory: 512M
+
+volumes:
+  ollama-models:

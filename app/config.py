@@ -36,6 +36,10 @@ class Settings:
     classifier: str
     log_level: str
     anthropic_api_key: str | None
+    ollama_model: str
+    ollama_timeout_seconds: float
+    max_tokens: int
+    sonnet_thinking: str
 
     @property
     def mode(self) -> str:
@@ -54,4 +58,11 @@ def get_settings() -> Settings:
         classifier=os.getenv("CLASSIFIER", "rules"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
+        ollama_model=os.getenv("OLLAMA_MODEL", "llama3.2:3b"),
+        ollama_timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
+        # A cap, not a target: you are billed for what is generated, not for
+        # this number. Bounded because a router wants bounded answers.
+        max_tokens=_int("MAX_TOKENS", 1024),
+        # "adaptive" (the model default) or "disabled". See AnthropicTier.
+        sonnet_thinking=os.getenv("SONNET_THINKING", "adaptive"),
     )

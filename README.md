@@ -4,7 +4,7 @@ A cost-aware LLM request router. It classifies each incoming query and dispatche
 
 Everything — including autoscaling — runs on a laptop. Kubernetes is not cloud: `kind` runs a real cluster in Docker containers locally, for free. See [`plan.md`](plan.md) for the full design.
 
-**Status: Ring 0.** The pipeline runs end to end in mock mode with no credentials.
+**Status: Phase 1 complete.** The pipeline runs end to end in mock mode with no credentials, and against real models (Ollama locally, Haiku and Sonnet via the Anthropic API) when configured.
 
 ## Quick start
 
@@ -53,6 +53,26 @@ cache:{schema}:{mock|live}:{sha256(normalized prompt)}
 
 Without that `mock|live` segment, a mock-mode load test would write canned responses into the keyspace live requests read from, and the system would start serving `"[mock:sonnet] ..."` as if it were a real answer. Cached entries also record which tier produced them, because the key is prompt-only and the cache is checked *before* classification — so the first tier to answer a prompt answers it forever. That is a deliberate tradeoff; recording the tier makes it measurable rather than invisible.
 
+## Live tiers
+
+Mock mode is the default. To use real models:
+
+```bash
+cp .env.example .env          # then set ANTHROPIC_API_KEY
+MOCK_TIERS=false docker compose up -d
+```
+
+Tiers are built independently, so **the local tier works with no Anthropic account at all** — Ollama needs no credentials. Without a key you get a working `local` tier and a 503 with an actionable message if a prompt routes to a paid tier.
+
+Ollama is expected on the host by default (`host.docker.internal:11434`). On macOS that is deliberate: Docker Desktop gives containers no Metal access, so a containerized Ollama runs on CPU and is far slower than the host install — and the local tier is meant to be the fast one. For Linux or CI, a containerized Ollama is available behind a profile:
+
+```bash
+docker compose --profile with-ollama up -d
+OLLAMA_URL=http://ollama:11434
+```
+
+Two knobs worth knowing. `MAX_TOKENS` (default 1024) is a cap, not a target — you are billed for what is generated. `SONNET_THINKING` defaults to `adaptive`, which is how Sonnet 5 runs when unconfigured; setting it to `disabled` trades some quality for lower cost and latency.
+
 ## Development
 
 ```bash
@@ -68,8 +88,7 @@ Requirements are split by purpose. `requirements.txt` is the gateway runtime and
 
 | Phase | Adds | Substrate |
 |---|---|---|
-| **Ring 0** ✅ | Gateway, tier interface, mock mode, cache, stats, logging | Compose |
-| Ring 1 | Live Ollama + Haiku + Sonnet tiers | Compose |
+| **1** ✅ | Gateway, tier interface, mock mode, cache, stats, logging, live tiers | Compose |
 | 2 | Load balancer, circuit breaker, guardrails | Compose |
 | 3 | ML classifier, tests, CI | Compose + Actions |
 | 4 | Kubernetes manifests, KEDA autoscaling | `kind` (local) |

@@ -245,6 +245,8 @@ For command-line *tools* you run rather than import (`ruff`, `pytest`, `httpie`)
 
 ## Phase 1 — the pipeline, on Compose
 
+**Status: complete.** See the repository for what shipped; the notes below are the original specification.
+
 - FastAPI gateway with `POST /query`, `GET /healthz`, `GET /readyz`, `GET /stats`
 - Rule-based classifier: prompt length, code-fence regex, sentence count, keyword flags
 - Three tier handlers behind a common interface (Ollama via REST, Haiku and Sonnet via the Anthropic SDK)
