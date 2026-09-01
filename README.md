@@ -52,6 +52,8 @@ sleep 7 && docker stop ai-router-gateway-2
 
 Measured: 2341 requests, **0 failed**, 6 transparently retried onto surviving replicas.
 
+Each run uses a fresh prompt set, so repeated runs stay comparable rather than replaying the previous run's cache. `--reuse-prompts` measures the warm-cache path deliberately — roughly 2x the throughput and a p50 near 20ms, which is the cache working, not the router.
+
 ## Capability guardrails
 
 Each tier declares what it may be asked to do (`app/manifests/*.yaml`). Requests state the capabilities they need and are refused with 403 before any model call:

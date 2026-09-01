@@ -1,8 +1,13 @@
 """Concurrent load driver.
 
 A dependency-free stand-in for k6/hey: httpx is already required, so the load
-test runs on a fresh clone with no extra install. Prompts are unique per
-request so the cache does not absorb the load being measured.
+test runs on a fresh clone with no extra install.
+
+Prompts are unique per request *and per run*. The run tag matters more than it
+looks: without it every run replays the previous run's prompts, so the second
+run onwards measures cache hits rather than routing, reporting throughput that
+is inflated and latency that is not the system under test. Pass
+--reuse-prompts to deliberately measure the warm-cache path instead.
 
     python load/driver.py --duration 20 --concurrency 12
 
@@ -16,6 +21,7 @@ import argparse
 import asyncio
 import itertools
 import time
+import uuid
 
 import httpx
 
@@ -26,6 +32,7 @@ async def worker(
     counter: itertools.count,
     deadline: float,
     results: dict,
+    run_tag: str,
 ) -> None:
     while time.monotonic() < deadline:
         n = next(counter)
@@ -33,7 +40,7 @@ async def worker(
         try:
             r = await client.post(
                 url,
-                json={"prompt": f"What is fact number {n}?"},
+                json={"prompt": f"What is fact {run_tag} number {n}?"},
                 timeout=30.0,
             )
             elapsed = (time.perf_counter() - started) * 1000
@@ -65,7 +72,14 @@ async def main() -> None:
     parser.add_argument("--host", default="http://localhost:8000")
     parser.add_argument("--duration", type=float, default=20.0)
     parser.add_argument("--concurrency", type=int, default=12)
+    parser.add_argument(
+        "--reuse-prompts",
+        action="store_true",
+        help="Replay a fixed prompt set so the run measures the warm cache instead.",
+    )
     args = parser.parse_args()
+
+    run_tag = "fixed" if args.reuse_prompts else uuid.uuid4().hex[:8]
 
     results = {"ok": 0, "failed": 0, "latencies": [], "statuses": {}, "errors": {}}
     counter = itertools.count()
@@ -76,7 +90,7 @@ async def main() -> None:
     async with httpx.AsyncClient(limits=limits) as client:
         await asyncio.gather(
             *(
-                worker(client, f"{args.host}/query", counter, deadline, results)
+                worker(client, f"{args.host}/query", counter, deadline, results, run_tag)
                 for _ in range(args.concurrency)
             )
         )
@@ -84,6 +98,8 @@ async def main() -> None:
     elapsed = time.monotonic() - started
     total = results["ok"] + results["failed"]
     lat = results["latencies"]
+    mode = "warm cache (--reuse-prompts)" if args.reuse_prompts else f"cold, run {run_tag}"
+    print(f"mode        {mode}")
     print(f"requests    {total}  ({total / elapsed:.1f}/s over {elapsed:.1f}s)")
     print(f"ok          {results['ok']}")
     print(f"failed      {results['failed']}")
