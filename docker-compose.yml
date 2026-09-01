@@ -50,6 +50,7 @@ services:
       LB_FAILURE_THRESHOLD: "${LB_FAILURE_THRESHOLD:-3}"
       LB_COOLDOWN_SECONDS: "${LB_COOLDOWN_SECONDS:-30}"
       LB_HEALTH_INTERVAL_SECONDS: "${LB_HEALTH_INTERVAL_SECONDS:-2}"
+      LB_UPSTREAM_TIMEOUT_SECONDS: "${LB_UPSTREAM_TIMEOUT_SECONDS:-120}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz').status==200 else 1)"]

@@ -62,7 +62,14 @@ async def _health_loop(app: FastAPI) -> None:
 async def lifespan(app: FastAPI):
     configure_logging(os.getenv("LOG_LEVEL", "INFO"))
     app.state.pool = _build_pool()
-    app.state.client = httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=5.0))
+    # How long to wait on a replica before treating it as failed. Generous by
+    # default because a Sonnet call with adaptive thinking is genuinely slow,
+    # but tunable: a hung replica should not hold a connection open forever,
+    # and lowering this is what makes the circuit breaker observable live.
+    upstream_timeout = float(os.getenv("LB_UPSTREAM_TIMEOUT_SECONDS", "120"))
+    app.state.client = httpx.AsyncClient(
+        timeout=httpx.Timeout(upstream_timeout, connect=5.0)
+    )
     app.state.started_at = time.time()
     app.state.dispatched = 0
     app.state.rejected = 0

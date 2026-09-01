@@ -41,7 +41,7 @@ The balancer is the entry point on port 8000; the gateway publishes no host port
 curl -s localhost:8000/stats | jq '{strategy, dispatched, retried, replicas: [.replicas[] | {url, requests, circuit: .circuit.state}]}'
 ```
 
-`LB_STRATEGY` is `least_connections` (default) or `round_robin`. Replicas are discovered by DNS, so scaling needs no config change. Each replica has a circuit breaker: three consecutive failures trip it out of rotation for 30s, then one half-open probe decides whether it comes back.
+`LB_STRATEGY` is `least_connections` (default) or `round_robin`. `LB_UPSTREAM_TIMEOUT_SECONDS` (default 120) bounds how long a replica may hang before it counts as failed — lower it to make the circuit breaker observable in seconds rather than minutes. Replicas are discovered by DNS, so scaling needs no config change. Each replica has a circuit breaker: three consecutive failures trip it out of rotation for 30s, then one half-open probe decides whether it comes back.
 
 Chaos test — kill a replica mid-load and watch nothing fail:
 
