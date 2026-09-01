@@ -53,6 +53,7 @@ def build_registry(settings: Settings) -> TierRegistry:
             settings.ollama_url,
             settings.ollama_model,
             timeout_seconds=settings.ollama_timeout_seconds,
+            max_tokens=settings.max_tokens,
         )
     }
 

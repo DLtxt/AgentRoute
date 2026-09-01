@@ -36,14 +36,44 @@ services:
         limits:
           memory: 6G
 
+  # Entry point. The gateway deliberately publishes no host port -- only the
+  # balancer does, or `--scale gateway=3` would collide on it.
+  balancer:
+    build: .
+    command: ["uvicorn", "app.load_balancer:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8000:8080"
+    environment:
+      GATEWAY_HOST: "gateway"
+      GATEWAY_PORT: "8000"
+      LB_STRATEGY: "${LB_STRATEGY:-least_connections}"
+      LB_FAILURE_THRESHOLD: "${LB_FAILURE_THRESHOLD:-3}"
+      LB_COOLDOWN_SECONDS: "${LB_COOLDOWN_SECONDS:-30}"
+      LB_HEALTH_INTERVAL_SECONDS: "${LB_HEALTH_INTERVAL_SECONDS:-2}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/healthz').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    depends_on:
+      - gateway
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
   gateway:
     build: .
-    # Ring 0/1 have no load balancer, so the gateway is the entry point and
-    # publishes a host port. Phase 2 removes this block: once the balancer
-    # fronts N replicas, only the balancer may publish, or `--scale gateway=3`
-    # collides on the port.
-    ports:
-      - "8000:8000"
+    # Three replicas by default, so `docker compose up -d` gives the balancer
+    # something to balance without a --scale flag. Passing --scale gateway=N
+    # still overrides this; omitting it no longer silently drops back to one.
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          memory: 512M
     environment:
       MOCK_TIERS: "${MOCK_TIERS:-true}"
       REDIS_URL: "redis://redis:6379/0"
@@ -64,10 +94,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 512M
 
 volumes:
   ollama-models:

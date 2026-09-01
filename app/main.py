@@ -20,6 +20,7 @@ from redis.asyncio import Redis
 from app.cache import Cache
 from app.classifier import rules
 from app.config import get_settings
+from app.guardrails import CapabilityDenied, Guardrails, load_manifests
 from app.logging_config import configure_logging
 from app.models import QueryRequest, QueryResponse
 from app.stats import Stats
@@ -45,6 +46,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.stats = Stats(started_at=time.time())
     app.state.tiers = build_registry(settings)
+    app.state.guardrails = Guardrails(load_manifests())
 
     log.info(
         "gateway.startup",
@@ -73,6 +75,19 @@ async def tier_not_available(request: Request, exc: TierNotAvailable) -> JSONRes
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(CapabilityDenied)
+async def capability_denied(request: Request, exc: CapabilityDenied) -> JSONResponse:
+    """A guardrail refusal is an authorization result, not an error."""
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
+        content={
+            "detail": str(exc),
+            "tier": exc.tier.value,
+            "capability": exc.capability,
+        },
     )
 
 
@@ -110,7 +125,10 @@ async def readyz(request: Request, response: Response) -> dict:
 
 @app.get("/stats")
 async def stats(request: Request) -> dict:
-    return request.app.state.stats.snapshot()
+    return {
+        **request.app.state.stats.snapshot(),
+        "guardrails": request.app.state.guardrails.snapshot(),
+    }
 
 
 @app.get("/scale-metric")
@@ -136,6 +154,16 @@ async def query(payload: QueryRequest, request: Request) -> QueryResponse:
     try:
         cached = await cache.get(payload.prompt)
         if cached is not None:
+            # Authorize the cache hit too. Checking the cache before
+            # classifying means a hit has no classifier-assigned tier to test
+            # against -- so it is tested against the tier that *produced* the
+            # entry, which is why that tier is stored. Without this, asking
+            # once with an allowed capability would let anyone retrieve the
+            # answer afterwards with a denied one: authorization becomes
+            # skippable by being second.
+            request.app.state.guardrails.enforce(
+                cached.tier, payload.capabilities, request_id=request_id
+            )
             input_tokens = estimate_tokens(payload.prompt)
             output_tokens = estimate_tokens(cached.text)
             avoided = estimate_cost(cached.tier, input_tokens, output_tokens)
@@ -164,6 +192,10 @@ async def query(payload: QueryRequest, request: Request) -> QueryResponse:
 
         st.record_miss()
         decision = rules.classify(payload.prompt)
+        # Guardrail before dispatch: a refused request must cost no model call.
+        request.app.state.guardrails.enforce(
+            decision.tier, payload.capabilities, request_id=request_id
+        )
         registry: TierRegistry = request.app.state.tiers
         result = await registry.get(decision.tier).complete(payload.prompt)
         await cache.set(payload.prompt, result)

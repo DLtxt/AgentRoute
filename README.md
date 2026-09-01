@@ -4,7 +4,7 @@ A cost-aware LLM request router. It classifies each incoming query and dispatche
 
 Everything — including autoscaling — runs on a laptop. Kubernetes is not cloud: `kind` runs a real cluster in Docker containers locally, for free. See [`plan.md`](plan.md) for the full design.
 
-**Status: Phase 1 complete.** The pipeline runs end to end in mock mode with no credentials, and against real models (Ollama locally, Haiku and Sonnet via the Anthropic API) when configured.
+**Status: Phase 2 complete.** The pipeline runs end to end in mock mode with no credentials, and against real models (Ollama locally, Haiku and Sonnet via the Anthropic API) when configured.
 
 ## Quick start
 
@@ -32,6 +32,36 @@ sonnet  HIT      0.54ms  cache hit (originally served by sonnet)
 `make demo` runs exactly this (needs `jq`).
 
 ## Endpoints
+
+The balancer is the entry point on port 8000; the gateway publishes no host port. `docker compose up -d` starts three gateway replicas, the balancer, and Redis.
+
+## Load balancing
+
+```bash
+curl -s localhost:8000/stats | jq '{strategy, dispatched, retried, replicas: [.replicas[] | {url, requests, circuit: .circuit.state}]}'
+```
+
+`LB_STRATEGY` is `least_connections` (default) or `round_robin`. Replicas are discovered by DNS, so scaling needs no config change. Each replica has a circuit breaker: three consecutive failures trip it out of rotation for 30s, then one half-open probe decides whether it comes back.
+
+Chaos test — kill a replica mid-load and watch nothing fail:
+
+```bash
+python load/driver.py --duration 20 --concurrency 12 &
+sleep 7 && docker stop ai-router-gateway-2
+```
+
+Measured: 2341 requests, **0 failed**, 6 transparently retried onto surviving replicas.
+
+## Capability guardrails
+
+Each tier declares what it may be asked to do (`app/manifests/*.yaml`). Requests state the capabilities they need and are refused with 403 before any model call:
+
+```bash
+curl -s -X POST localhost:8000/query -H 'content-type: application/json' \
+  -d '{"prompt":"who is Ada Lovelace?","capabilities":["file_access"]}'
+```
+
+Deny beats allow, and an unlisted capability is denied — an unlisted capability is an unreviewed one. Cache hits are authorized too, against the tier recorded on the entry; without that, asking once with an allowed capability would let anyone retrieve the answer later with a denied one.
 
 | Endpoint | Purpose |
 |---|---|
@@ -89,7 +119,7 @@ Requirements are split by purpose. `requirements.txt` is the gateway runtime and
 | Phase | Adds | Substrate |
 |---|---|---|
 | **1** ✅ | Gateway, tier interface, mock mode, cache, stats, logging, live tiers | Compose |
-| 2 | Load balancer, circuit breaker, guardrails | Compose |
+| **2** ✅ | Load balancer, circuit breaker, retry, capability guardrails | Compose |
 | 3 | ML classifier, tests, CI | Compose + Actions |
 | 4 | Kubernetes manifests, KEDA autoscaling | `kind` (local) |
 | Appendix | The same system on a cloud cluster | optional |

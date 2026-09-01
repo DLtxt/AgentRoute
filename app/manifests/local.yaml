@@ -1,0 +1,8 @@
+tier: local
+allowed_capabilities:
+  - text_generation
+denied_capabilities:
+  - web_search
+  - code_execution
+  - file_access
+  - tool_use

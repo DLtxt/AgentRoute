@@ -142,7 +142,7 @@ Cache write --> Response
 
 Two deliberate ordering choices:
 
-1. **Cache check precedes classification.** A repeat prompt costs a hash lookup — not a classifier call plus a model call. Free to build, strictly better.
+1. **Cache check precedes classification.** A repeat prompt costs a hash lookup — not a classifier call plus a model call. Cheap and worth doing, but *not* free: a cache hit has no classifier-assigned tier, so it has no tier to authorize against. Building Phase 2 proved this the hard way — guardrails were bypassable simply by asking once with an allowed capability and again with a denied one. A hit is now authorized against the tier recorded on the cache entry, which is a second reason that field earns its place.
 2. **The load balancer fronts the gateway, not the model tiers.** Haiku and Sonnet are hosted APIs; Anthropic already load-balances those. The only thing you host, and therefore the only thing you can balance, is your own gateway.
 
 ### Deployment topology
@@ -169,7 +169,7 @@ Follow these from the start and the optional cloud appendix is a day's work rath
 7. **Mock mode.** `MOCK_TIERS=true` stubs the paid tiers with canned responses and realistic per-tier delays. Makes CI runnable without secrets, load tests free, and the repo runnable by a reviewer with no API key.
 8. **Resource requests and limits on every pod.** Required for meaningful scheduling, and forces you to actually know what your services consume.
 
-**Note on replica discovery.** The custom load balancer takes its replica list from `GATEWAY_REPLICAS`, a static env var. That works under Compose, where you declare the replicas. It does **not** work under KEDA, where the replica count changes at runtime. See [Load balancer](#5-load-balancer--the-piece-to-get-right) for how this is resolved.
+**Note on replica discovery.** The balancer discovers replicas by resolving a DNS name to every address behind it, so `docker compose up` with three gateway replicas needs no replica list. An explicit `GATEWAY_REPLICAS` list overrides discovery when fixed targets are wanted. Under Kubernetes the same mechanism needs a headless Service to return pod IPs — see [Load balancer](#5-load-balancer--the-piece-to-get-right).
 
 ---
 
@@ -260,8 +260,11 @@ For command-line *tools* you run rather than import (`ruff`, `pytest`, `httpie`)
 
 ## Phase 2 — load balancer and guardrails
 
+**Status: complete.**
+
 - Extract the load balancer into its own service (`app/load_balancer.py`, own container), fronting 2+ gateway replicas
 - Round-robin first. Then least-connections. Then health checking against `/readyz`. Then a circuit breaker (trip after 3 consecutive failures, 30s cooldown, half-open retry)
+- **Retry on a different replica.** Health checks run on an interval, so there is always a window where a replica has died but is not yet marked down; requests already in flight to it must land somewhere. Without retry they surface as 502s — measured at 3 failures out of 1910 before it was added, and 0 out of 2341 after. This is also precisely what a bare Kubernetes Service does *not* do for you.
 - The gateway service must **publish no host ports** — only the load balancer does. Otherwise `--scale gateway=3` collides on the port.
 - Per-tier YAML capability manifests + a FastAPI dependency enforcing them before dispatch, logging every violation
 - Compose now runs: load balancer, gateway ×3, redis, ollama
@@ -402,9 +405,9 @@ Own service, fronting N gateway replicas.
 
 **"But doesn't Kubernetes make this redundant?"** In Phase 4 a Service does the load balancing, yes — and that's the point of having built it first. You can explain precisely what the Service abstraction does because you implemented it. Better still, your version does something a plain Service *doesn't*: a Kubernetes Service has no circuit breaker — that's what a service mesh like Istio or Linkerd adds. Knowing exactly where the platform primitive stops and where you'd reach for a mesh is a genuinely senior-sounding distinction, and you'll have earned it.
 
-**The honest limitation.** The balancer reads its replica list from `GATEWAY_REPLICAS`, a static env var. Under KEDA the replica count changes at runtime, so that list goes stale — meaning the custom balancer is the **Compose entry point only**, and the Kubernetes path in Phase 4 has no circuit breaker. Two consequences worth stating in the README rather than discovering in an interview: the deployed system's resilience story is different from the Compose one, and `test_load_balancer.py` / `test_circuit_breaker.py` cover code that isn't in the Phase 4 request path.
+**Replica discovery.** The balancer resolves a DNS name to every address behind it and reconciles its replica set each health-check cycle, adding and removing replicas as they appear and vanish. Docker's embedded DNS returns all container IPs for a service name, so scaling the gateway needs no configuration change. `GATEWAY_REPLICAS` overrides discovery with a fixed list.
 
-The fix, if you want one path instead of two: give the gateway a headless Service and have the balancer discover pod IPs via DNS instead of an env var. That is real work, not a config swap — it belongs in [Stretch ideas](#stretch-ideas), not in the critical path.
+**What this means for Phase 4.** The same mechanism carries over to Kubernetes, but only against a *headless* Service — a normal ClusterIP Service resolves to a single virtual IP, which would collapse the pool to one entry. That is a one-line manifest change rather than the rewrite an env-var-based balancer would have needed. Still worth stating plainly: in Phase 4 the Service itself also load-balances, so the question of whether traffic flows through this balancer or straight to the Service is a deployment choice, and only the balancer path has a circuit breaker.
 
 ### 6. Capability guardrails
 One manifest per tier:

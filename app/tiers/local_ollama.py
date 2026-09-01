@@ -23,8 +23,15 @@ class OllamaError(TierUpstreamError):
 class OllamaTier(Tier):
     name = TierName.LOCAL
 
-    def __init__(self, base_url: str, model: str, timeout_seconds: float = 120.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        timeout_seconds: float = 120.0,
+        max_tokens: int = 1024,
+    ) -> None:
         self._model = model
+        self._max_tokens = max_tokens
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=httpx.Timeout(timeout_seconds, connect=5.0),
@@ -35,7 +42,15 @@ class OllamaTier(Tier):
         try:
             r = await self._client.post(
                 "/api/generate",
-                json={"model": self._model, "prompt": prompt, "stream": False},
+                json={
+                    "model": self._model,
+                    "prompt": prompt,
+                    "stream": False,
+                    # Same cap the paid tiers honour, so tier latency stays
+                    # comparable and a load test cannot be derailed by one
+                    # unbounded generation.
+                    "options": {"num_predict": self._max_tokens},
+                },
             )
             r.raise_for_status()
         except httpx.HTTPStatusError as exc:

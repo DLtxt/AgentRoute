@@ -1,0 +1,8 @@
+tier: haiku
+allowed_capabilities:
+  - text_generation
+  - summarization
+  - tool_use
+denied_capabilities:
+  - code_execution
+  - file_access

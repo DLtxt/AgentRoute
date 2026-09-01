@@ -1,0 +1,9 @@
+tier: sonnet
+allowed_capabilities:
+  - text_generation
+  - summarization
+  - tool_use
+  - code_execution
+  - web_search
+denied_capabilities:
+  - file_access
