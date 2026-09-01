@@ -1,0 +1,16 @@
+# Gateway runtime only — this is what goes into the container image.
+# The ML stack is deliberately NOT here: the gateway imports none of it, and
+# adding it would put several hundred MB of numpy/scipy/xgboost into an image
+# that gets rebuilt on every code change and pulled by every kind node.
+# Training runs on the host from requirements-ml.txt; it joins the image in
+# Phase 3, when the gateway actually needs to load a model.
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.5
+redis==8.1.0
+httpx==0.28.1
+PyYAML==6.0.3
+python-dotenv==1.2.3
+
+# Ring 1 live tiers
+anthropic==1.2.0

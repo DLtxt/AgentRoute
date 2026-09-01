@@ -1,0 +1,57 @@
+"""Configuration, sourced entirely from the environment.
+
+Portability contract rules 1-3: no hardcoded hostnames, all config via
+environment, secrets only via env vars. Nothing here reads a file from a host
+path or assumes a working directory.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from functools import lru_cache
+
+
+def _bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return int(raw)
+
+
+@dataclass(frozen=True)
+class Settings:
+    redis_url: str
+    ollama_url: str
+    mock_tiers: bool
+    cache_ttl_seconds: int
+    cache_schema_version: str
+    classifier: str
+    log_level: str
+    anthropic_api_key: str | None
+
+    @property
+    def mode(self) -> str:
+        """Cache namespace. Keeps mock-mode responses out of the live keyspace."""
+        return "mock" if self.mock_tiers else "live"
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings(
+        redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+        ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
+        mock_tiers=_bool("MOCK_TIERS", True),
+        cache_ttl_seconds=_int("CACHE_TTL_SECONDS", 3600),
+        cache_schema_version=os.getenv("CACHE_SCHEMA_VERSION", "v1"),
+        classifier=os.getenv("CLASSIFIER", "rules"),
+        log_level=os.getenv("LOG_LEVEL", "INFO"),
+        anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
+    )
