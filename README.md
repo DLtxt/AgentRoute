@@ -52,7 +52,22 @@ sleep 7 && docker stop ai-router-gateway-2
 
 Measured: 2341 requests, **0 failed**, 6 transparently retried onto surviving replicas.
 
+`--mix` sends a workload spread across all three tiers (120/300/800ms mock latencies) instead of a uniform one — needed to tell the balancing strategies apart at all, since round-robin is optimal when every request costs the same.
+
 Each run uses a fresh prompt set, so repeated runs stay comparable rather than replaying the previous run's cache. `--reuse-prompts` measures the warm-cache path deliberately — roughly 2x the throughput and a p50 near 20ms, which is the cache working, not the router.
+
+### Measured limits
+
+Numbers from an 8-core M-series laptop with the load generator on the same machine, mock mode:
+
+| | |
+|---|---|
+| Peak throughput | ~480 req/s |
+| Single load-driver ceiling | ~225 req/s — **run 2-3 drivers in parallel or you measure the client** |
+| Throughput vs. gateway replicas | flat: 1 replica 479/s, 3 replicas 483/s, 6 replicas 468/s |
+| CPU share at peak | balancer ~53%, each gateway 14-21% |
+
+Two things worth knowing. The balancer carries roughly 3x a gateway's CPU because every request passes through it, and **adding gateway replicas does not raise throughput here** — a hand-built userspace proxy is a very different thing from a Kubernetes Service, which balances in the kernel. That gap is the honest answer to "why does Phase 4 scale the gateway?": autoscaling replicas only helps once the work per request is real, not when a single proxy fronts everything.
 
 ## Capability guardrails
 

@@ -20,10 +20,31 @@ from __future__ import annotations
 import argparse
 import asyncio
 import itertools
+import random
 import time
 import uuid
 
 import httpx
+
+# Prompts chosen so the rule classifier sends each to a different tier, whose
+# mock latencies are 120 / 300 / 800 ms. A uniform workload cannot distinguish
+# the two balancing strategies -- round-robin is optimal when every request
+# costs the same. The spread is what makes least-connections worth having.
+MIXED_SHAPES = (
+    ("local", "What is fact {tag} number {n}?"),
+    ("haiku", "Implement a helper for case {tag}-{n}."),
+    ("sonnet", "```py\n# case {tag}-{n}\nx = {n}\n```"),
+)
+# Weighted so the slow tier is a minority, as in real traffic: a few expensive
+# requests among many cheap ones is exactly the case that starves round-robin.
+MIXED_WEIGHTS = (0.6, 0.25, 0.15)
+
+
+def build_prompt(tag: str, n: int, mixed: bool) -> tuple[str, str]:
+    if not mixed:
+        return "local", f"What is fact {tag} number {n}?"
+    tier, template = random.choices(MIXED_SHAPES, weights=MIXED_WEIGHTS, k=1)[0]
+    return tier, template.format(tag=tag, n=n)
 
 
 async def worker(
@@ -33,20 +54,19 @@ async def worker(
     deadline: float,
     results: dict,
     run_tag: str,
+    mixed: bool,
 ) -> None:
     while time.monotonic() < deadline:
         n = next(counter)
+        tier, prompt = build_prompt(run_tag, n, mixed)
         started = time.perf_counter()
         try:
-            r = await client.post(
-                url,
-                json={"prompt": f"What is fact {run_tag} number {n}?"},
-                timeout=30.0,
-            )
+            r = await client.post(url, json={"prompt": prompt}, timeout=30.0)
             elapsed = (time.perf_counter() - started) * 1000
             if r.status_code == 200:
                 results["ok"] += 1
                 results["latencies"].append(elapsed)
+                results["by_tier"][tier] = results["by_tier"].get(tier, 0) + 1
             else:
                 results["failed"] += 1
                 results["statuses"][r.status_code] = (
@@ -73,6 +93,12 @@ async def main() -> None:
     parser.add_argument("--duration", type=float, default=20.0)
     parser.add_argument("--concurrency", type=int, default=12)
     parser.add_argument(
+        "--mix",
+        action="store_true",
+        help="Send a mixed workload across all three tiers (120/300/800ms) so "
+        "request durations vary. Required to tell the balancing strategies apart.",
+    )
+    parser.add_argument(
         "--reuse-prompts",
         action="store_true",
         help="Replay a fixed prompt set so the run measures the warm cache instead.",
@@ -81,7 +107,14 @@ async def main() -> None:
 
     run_tag = "fixed" if args.reuse_prompts else uuid.uuid4().hex[:8]
 
-    results = {"ok": 0, "failed": 0, "latencies": [], "statuses": {}, "errors": {}}
+    results = {
+        "ok": 0,
+        "failed": 0,
+        "latencies": [],
+        "statuses": {},
+        "errors": {},
+        "by_tier": {},
+    }
     counter = itertools.count()
     deadline = time.monotonic() + args.duration
     started = time.monotonic()
@@ -90,7 +123,10 @@ async def main() -> None:
     async with httpx.AsyncClient(limits=limits) as client:
         await asyncio.gather(
             *(
-                worker(client, f"{args.host}/query", counter, deadline, results, run_tag)
+                worker(
+                    client, f"{args.host}/query", counter, deadline,
+                    results, run_tag, args.mix,
+                )
                 for _ in range(args.concurrency)
             )
         )
@@ -99,6 +135,7 @@ async def main() -> None:
     total = results["ok"] + results["failed"]
     lat = results["latencies"]
     mode = "warm cache (--reuse-prompts)" if args.reuse_prompts else f"cold, run {run_tag}"
+    mode += ", mixed workload" if args.mix else ", uniform workload"
     print(f"mode        {mode}")
     print(f"requests    {total}  ({total / elapsed:.1f}/s over {elapsed:.1f}s)")
     print(f"ok          {results['ok']}")
@@ -111,6 +148,11 @@ async def main() -> None:
         f"latency     p50 {percentile(lat, 50):.0f}ms  "
         f"p95 {percentile(lat, 95):.0f}ms  p99 {percentile(lat, 99):.0f}ms"
     )
+    if args.mix and results["by_tier"]:
+        spread = "  ".join(
+            f"{t}={results['by_tier'].get(t, 0)}" for t, _ in MIXED_SHAPES
+        )
+        print(f"tier mix    {spread}")
 
 
 if __name__ == "__main__":
