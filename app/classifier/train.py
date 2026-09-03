@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import pickle
 from collections import Counter
 from pathlib import Path
@@ -88,6 +89,16 @@ def _data_quality(x: list[list[float]], y: list[int]) -> dict:
     }
 
 
+def _test_coverage(y_test: list[int]) -> None:
+    present = set(y_test)
+    missing = [INDEX_TO_LABEL[i] for i in INDEX_TO_LABEL if i not in present]
+    if missing:
+        print(f"\nWARNING: no held-out examples of {', '.join(missing)}.")
+        print("Their confusion row is empty because there was nothing to")
+        print("predict, not because the model got them wrong. Accuracy below")
+        print(f"describes a {len(present)}-class problem, whatever the labels suggest.")
+
+
 def _report(name: str, y_true: list[int], y_pred: list[int]) -> dict:
     n = len(INDEX_TO_LABEL)
     matrix = _confusion(y_true, y_pred, n)
@@ -132,6 +143,7 @@ def main() -> None:
         x, y, test_size=args.test_size, random_state=args.seed, stratify=y
     )
     print(f"\n{len(x_train)} train / {len(x_test)} test, {len(FEATURE_NAMES)} features")
+    _test_coverage(y_test)
 
     metrics: dict[str, dict] = {}
 
@@ -189,9 +201,19 @@ def main() -> None:
 
     delta = metrics["xgb"]["accuracy"] - metrics["logreg"]["accuracy"]
     baseline = quality["majority_baseline"]
-    print(f"\nxgboost - logreg: {delta:+.3f} on {len(x_test)} held-out samples.")
-    if abs(delta) < 0.05:
-        print("Within noise at this sample size -- do not claim a winner.")
+    n = len(x_test)
+    a, b = metrics["logreg"]["accuracy"], metrics["xgb"]["accuracy"]
+    # Standard error of the difference between two proportions on the same
+    # sample size, then the usual 95% interval.
+    se = math.sqrt(a * (1 - a) / n + b * (1 - b) / n) if n else 0.0
+    margin = 1.96 * se
+
+    print(f"\nxgboost - logreg: {delta:+.3f} on {n} held-out samples.")
+    print(f"  that is {round(abs(delta) * n)} samples; 95% interval is +/-{margin:.3f}")
+    if abs(delta) <= margin:
+        print("  within noise at this sample size -- do not claim a winner.")
+    else:
+        print("  outside the noise band, but a single split is still weak evidence.")
 
     print(
         f"\nversus the majority-class baseline ({baseline:.3f}), "

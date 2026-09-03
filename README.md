@@ -202,7 +202,7 @@ python -m app.classifier.train --balanced    # inverse-frequency class weights
 
 The run checkpoints after every prompt and resumes if interrupted. `--fresh` discards existing labels and starts over. `--synthetic` writes placeholder labels with no API calls, for exercising the pipeline.
 
-`train.py` prints the majority-class baseline and the achievable ceiling next to each model's accuracy.
+`train.py` prints the majority-class baseline and the achievable ceiling next to each model's accuracy, warns when a class has no held-out examples, and compares the two models against the standard error rather than a fixed threshold.
 
 ### Checking a labeling run
 

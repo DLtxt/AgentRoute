@@ -181,7 +181,18 @@ Cache hits are authorized too, against the tier recorded on the entry.
 
 **Inspection** (`app/classifier/inspect.py`) — reports class balance, distinct feature vectors, conflicting rows, and the achievable ceiling, warning when a class is absent or under 10% and when many rows share features but disagree on the label. `--show N` prints the full evidence behind one label; `--conflicts` lists groups of identical features with disagreeing labels; `--samples` and `--label` filter the rows.
 
-**Training** (`app/classifier/train.py`) — logistic regression as the baseline, then XGBoost, on the same features and the same split. Reports both confusion matrices with the held-out sample size, feature importance, and each model's accuracy against the majority-class baseline and the achievable ceiling. `--balanced` applies inverse-frequency class weights. Models and metrics are written to `models/`.
+**Training** (`app/classifier/train.py`) — logistic regression as the baseline, then XGBoost, on the same features and the same split. Reports both confusion matrices with the held-out sample size, feature importance, and each model's accuracy against the majority-class baseline and the achievable ceiling. Warns when a class has no held-out examples, since an empty confusion row means there was nothing to predict rather than that the model got it wrong. The gap between the two models is compared against the standard error of the difference rather than a fixed threshold, which does not scale with sample size. `--balanced` applies inverse-frequency class weights. Models and metrics are written to `models/`.
+
+**Current results** (129 outcome-labeled prompts, 96 train / 33 test):
+
+| | accuracy | vs. baseline 0.597 |
+|---|---|---|
+| logistic regression | 0.788 | +0.191 |
+| XGBoost | 0.727 | +0.130 |
+
+Both beat a constant prediction. The 0.061 gap between them is two samples against a 95% interval of ±0.206, so neither is the winner.
+
+Two limitations. The dataset holds only two `sonnet` rows (1.6%) and none reach the held-out set, so this is a two-class result whatever the label set says — the outcome labels say Haiku 4.5 handles nearly everything the corpus contains. And `approx_tokens` is `char_length // 4` in 129 of 129 rows, perfectly collinear, which is why its importance is exactly zero.
 
 ---
 
