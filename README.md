@@ -306,6 +306,48 @@ make kind-down
 
 ---
 
+## How this compares to standard tooling
+
+Worth being precise about, because the honest answer is narrower than "better".
+
+### The load balancer
+
+Nothing in it is novel. Round-robin and least-connections are textbook, the circuit breaker is the Hystrix pattern, and retry-on-another-backend is what every reverse proxy has done for twenty years. **nginx, HAProxy, Envoy, and a service mesh such as Istio or Linkerd all do everything this does, plus TLS termination, connection pooling, outlier detection, traffic shifting, mTLS, and observability this has none of.** If you are choosing what to run in production, run one of those.
+
+Where it measurably wins is against one specific alternative: **a bare Kubernetes Service.**
+
+| | Kubernetes Service | This balancer |
+|---|---|---|
+| Layer | L4 (kube-proxy, packet level) | L7 (reads and re-sends the request) |
+| Selection | random / round-robin per connection | round-robin or least-connections per request |
+| Health | readiness probe removes an endpoint | polls `/readyz`, plus its own failure tracking |
+| Failing backend | keeps its endpoint until the probe trips | circuit breaker takes it out immediately, half-open probe restores it |
+| Request already sent to a dying pod | reaches the client as an error | retried on another replica |
+
+Measured over four trials with a pod killed abruptly: **1 failed request in 108,959 through the balancer, against 40 in 133,701 through the Service.** Tail latency separated too — p95 of 430–585 ms versus 221–1391 ms, the Service spiking when it routed at a pod that was already dying. The full table is above.
+
+That gap is real but it is not a gap against *the standard*; it is a gap against the platform primitive. The standard fix is a service mesh, which fills exactly this hole. What this project demonstrates is knowing precisely where the primitive stops and why the mesh exists — having built the missing piece rather than read about it.
+
+### The router
+
+The more distinctive part. Common LLM routing either sends everything to one model, or routes on a heuristic ("looks like code → big model"), or on embedding similarity to a labelled set.
+
+This routes on **outcome-based labels**: every prompt in the corpus was run through all three tiers and labelled with the cheapest tier that actually produced an acceptable answer, judged by a stronger model, with the weakest tier sampled three times and decided by majority because its quality on borderline prompts is close to a coin flip. The labels describe where capability actually breaks down rather than where a heuristic guesses it does.
+
+Two consequences that fall out of that and are unusual to see stated:
+
+- **The cache is consulted before classification**, so a repeat prompt costs a hash lookup instead of a classifier call plus a model call — and because a cache hit has no classifier verdict, the entry records which tier produced it so the hit can still be authorized. Skipping that makes capability guardrails bypassable by asking once with an allowed capability and again with a denied one.
+- **The measured tier boundary was not where difficulty suggested.** Haiku 4.5 answered 93 of 147 prompts acceptably, including "prove the halting problem is undecidable", leaving only 3 that needed Sonnet. Routing on prompt difficulty would have over-provisioned heavily. That result is a property of the grading rubric as much as the models, and the project says so rather than presenting a tidy three-class split.
+
+### Where it is worse
+
+- No TLS, no connection pooling to backends, no outlier detection, no traffic shifting, no tracing.
+- The balancer adds a userspace hop that a kernel-level Service does not.
+- Rate limiting is a fixed window, not a sliding one, so it permits a burst across a window boundary.
+- The classifier reads eight hand-crafted features; embeddings would almost certainly route better, at the cost of the explainability the feature-importance chart gives.
+
+---
+
 ## Deploying to a cloud cluster
 
 Optional. Nothing in the project requires it — everything above, autoscaling included, runs locally. This is for running it on infrastructure you do not own.

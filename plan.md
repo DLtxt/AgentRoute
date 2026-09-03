@@ -22,6 +22,7 @@ What is built, how it works, and what is not built yet. Operational instructions
 - [Configuration contract](#configuration-contract)
 - [Continuous integration](#continuous-integration)
 - [Tests](#tests)
+- [Reproducing this from the documents](#reproducing-this-from-the-documents)
 - [Not built](#not-built)
 
 ---
@@ -310,6 +311,24 @@ Images are built multi-arch (`linux/amd64,linux/arm64`) in CI, since development
 | `test_label.py` | Judge verdict parsing, empty-response handling |
 | `test_inspect.py` | Audit loading, conflict detection |
 | `test_load_balancer.py` | Also covers the scale metric averaging over healthy replicas |
+
+---
+
+## Reproducing this from the documents
+
+These two files describe the architecture and the behaviour, not the source. Someone rebuilding from them would reach a system that works the same way and produces different numbers.
+
+**Sufficient here:** the request path and its ordering, every component's behaviour and the reasoning behind it, the environment-variable contract, the deployment topology, the Kubernetes objects and why the gateway Service is headless, the autoscaling design and the four attempts it took to get a usable signal, the CI jobs, and the test inventory.
+
+**Not sufficient, in rough order of how much work is missing:**
+
+- **The corpus.** 148 hand-written prompts across three bands. The bands and their intent are described; the prompts are not, and could not be reconstructed. Different prompts produce different labels, so every measured accuracy figure would move.
+- **The labeled dataset.** Follows from the corpus and roughly $2 of API spend. `data/labeled_prompts.csv` and its `.audit.jsonl` sidecar are in the repository, so a clone has them; a rebuild from the documents alone would not.
+- **The rule classifier's thresholds.** The features and the routing intent are documented; the constants that implement them (`LONG_PROMPT_TOKENS = 300`, `MEDIUM_PROMPT_TOKENS = 60`) are not.
+- **The capability manifests.** One is shown as an example; the allow and deny lists for the other two tiers are not enumerated.
+- **The corpus generator's prior form.** The template-based version is described only by what was wrong with it.
+
+Everything in the second list lives in the repository, so a clone reproduces the system exactly. The gap is only for a rebuild from prose.
 
 ---
 
