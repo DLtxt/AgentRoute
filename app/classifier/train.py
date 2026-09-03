@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import pickle
+from collections import Counter
 from pathlib import Path
 
 from app.classifier.dataset import (
@@ -45,6 +46,48 @@ def _render(matrix: list[list[int]]) -> str:
     return "\n".join(lines)
 
 
+def _data_quality(x: list[list[float]], y: list[int]) -> dict:
+    """Three checks that decide whether training can possibly work.
+
+    A model cannot beat the majority-class rate without learning something, and
+    it cannot separate rows whose feature vectors are identical but whose labels
+    differ. Reporting both up front turns "0.685, not great" into "0.685, which
+    is worse than guessing" -- the difference between a mediocre result and a
+    failed one.
+    """
+    counts: dict[int, int] = {}
+    for label in y:
+        counts[label] = counts.get(label, 0) + 1
+    majority = max(counts.values()) / len(y)
+
+    groups: dict[tuple, list[int]] = {}
+    for vector, label in zip(x, y, strict=True):
+        groups.setdefault(tuple(vector), []).append(label)
+    conflicted = sum(1 for vector in x if len(set(groups[tuple(vector)])) > 1)
+
+    # Best possible accuracy on these features: for each set of identical
+    # vectors, always predict its most common label. The gap between this and
+    # the baseline is the entire amount of signal available to learn.
+    ceiling = sum(max(Counter(labels).values()) for labels in groups.values()) / len(y)
+
+    print("\ndata quality")
+    for index, count in sorted(counts.items()):
+        print(f"  {INDEX_TO_LABEL[index]:<8} {count:>4}  {count / len(y):6.1%}")
+    print(f"  majority-class baseline      {majority:.3f}")
+    print(f"  ceiling on these features    {ceiling:.3f}  (in-sample, optimistic)")
+    print(f"  learnable signal             {ceiling - majority:+.3f}")
+    print("  rows with identical features")
+    print(f"    but conflicting labels     {conflicted}/{len(y)} ({conflicted / len(y):.0%})")
+    if conflicted / len(y) > 0.1:
+        print("  ^ those rows are unlearnable by construction; no model can")
+        print("    separate them, and they cap the achievable accuracy.")
+    return {
+        "majority_baseline": majority,
+        "feature_ceiling": ceiling,
+        "unlearnable_rows": conflicted,
+    }
+
+
 def _report(name: str, y_true: list[int], y_pred: list[int]) -> dict:
     n = len(INDEX_TO_LABEL)
     matrix = _confusion(y_true, y_pred, n)
@@ -60,6 +103,12 @@ def main() -> None:
     parser.add_argument("--data", type=Path, default=LABELED_PATH)
     parser.add_argument("--test-size", type=float, default=0.25)
     parser.add_argument("--seed", type=int, default=20260902)
+    parser.add_argument(
+        "--balanced",
+        action="store_true",
+        help="Weight classes inversely to frequency. Stops the model "
+        "collapsing onto the majority class, at the cost of raw accuracy.",
+    )
     args = parser.parse_args()
 
     from sklearn.linear_model import LogisticRegression
@@ -77,6 +126,8 @@ def main() -> None:
         print("=" * 72)
 
     x, y = to_xy(rows)
+    quality = _data_quality(x, y)
+
     x_train, x_test, y_train, y_test = train_test_split(
         x, y, test_size=args.test_size, random_state=args.seed, stratify=y
     )
@@ -84,10 +135,16 @@ def main() -> None:
 
     metrics: dict[str, dict] = {}
 
-    logreg = LogisticRegression(max_iter=2000)
+    # Balanced weights, or the minority classes are simply never predicted:
+    # with 70% of rows on one label, ignoring the other two scores well.
+    logreg = LogisticRegression(max_iter=2000, class_weight="balanced" if args.balanced else None)
     logreg.fit(x_train, y_train)
     metrics["logreg"] = _report("logreg ", y_test, list(logreg.predict(x_test)))
 
+    freq = Counter(y_train)
+    weights = (
+        [len(y_train) / (len(freq) * freq[label]) for label in y_train] if args.balanced else None
+    )
     xgb = XGBClassifier(
         n_estimators=200,
         max_depth=4,
@@ -97,7 +154,7 @@ def main() -> None:
         random_state=args.seed,
         verbosity=0,
     )
-    xgb.fit(x_train, y_train)
+    xgb.fit(x_train, y_train, sample_weight=weights)
     metrics["xgb"] = _report("xgboost", y_test, list(xgb.predict(x_test)))
 
     print("\nxgboost feature importance")
@@ -123,6 +180,7 @@ def main() -> None:
                 "n_test": len(x_test),
                 "synthetic_rows": synthetic,
                 "trustworthy": synthetic == 0,
+                **quality,
                 **metrics,
             },
             indent=2,
@@ -130,9 +188,23 @@ def main() -> None:
     )
 
     delta = metrics["xgb"]["accuracy"] - metrics["logreg"]["accuracy"]
+    baseline = quality["majority_baseline"]
     print(f"\nxgboost - logreg: {delta:+.3f} on {len(x_test)} held-out samples.")
     if abs(delta) < 0.05:
         print("Within noise at this sample size -- do not claim a winner.")
+
+    print(
+        f"\nversus the majority-class baseline ({baseline:.3f}), "
+        f"ceiling {quality['feature_ceiling']:.3f}:"
+    )
+    for name, m in metrics.items():
+        gap = m["accuracy"] - baseline
+        verdict = "beats it" if gap > 0.02 else "NO BETTER THAN GUESSING"
+        print(f"  {name:<8} {m['accuracy']:.3f}  {gap:+.3f}  {verdict}")
+    if all(m["accuracy"] <= baseline + 0.02 for m in metrics.values()):
+        print("\nNeither model beats a constant prediction. The dataset, not the")
+        print("model choice, is the thing to fix -- check the class balance and")
+        print("the unlearnable-row count above.")
     print(f"Saved to {MODEL_DIR}")
 
 

@@ -142,17 +142,38 @@ INSTALL_ML=true CLASSIFIER=xgb docker compose up -d gateway
 
 Without either, the gateway falls back to rules and logs a warning — a fresh clone still serves, but the downgrade is never silent.
 
-### ⚠️ The models are not yet trained on real labels
+### ⚠️ Neither model beats guessing on the current dataset
 
-`data/labeled_prompts.csv` currently holds **synthetic** labels, written by `--synthetic` to prove the pipeline runs. Every accuracy figure fitted to them is meaningless as a statement about routing quality. `train.py` prints a loud warning and records `trustworthy: false` in `models/metrics.json`.
+The labeling run completed — 291 outcome-labeled prompts — and the result is negative:
 
-The real dataset comes from running every prompt through every tier and labeling each with *the cheapest tier that produced an acceptable answer* — a judgment made by outcome, not by intuition. A model trained on intuition labels only learns to reproduce the rule classifier, so comparing the two would measure nothing.
+```
+majority-class baseline      0.698
+ceiling on these features    0.852
+rows with identical features
+  but conflicting labels     122/291 (42%)
+
+logreg   0.685  -0.013  NO BETTER THAN GUESSING
+xgb      0.589  -0.109  NO BETTER THAN GUESSING
+```
+
+Always answering "haiku" scores 0.698. Both trained models do worse. This is a dataset problem, not a model-choice problem, and it has two causes worth understanding:
+
+**The corpus is template-generated**, so prompts differ only by a filled-in noun and collide in feature space. `What is the capital of Portugal?` and `What is the capital of Iceland?` produce identical feature vectors — correctly, since they are the same task.
+
+**The judge labels them inconsistently.** Those two got `local` and `haiku`. `Who is Alan Turing?` got `haiku` while `Who is Grace Hopper?` got `sonnet`. 42% of rows sit in a group of identical vectors carrying conflicting labels, which no model can separate.
+
+The ceiling of 0.852 says real signal exists (+0.155 over baseline); the models capture none of it. Fixing this means a genuinely varied corpus rather than template fills, and reducing judge noise — a stricter rubric, or majority vote over several judge samples. Both require re-labeling (~$4).
+
+Reporting this rather than a tuned number is the point. `train.py` now prints the baseline and the ceiling next to every score, because 0.685 reads as a mediocre result until you know that guessing scores 0.698.
+
+The dataset comes from running every prompt through every tier and labeling each with *the cheapest tier that produced an acceptable answer* — a judgment made by outcome, not by intuition. A model trained on intuition labels only learns to reproduce the rule classifier, so comparing the two would measure nothing.
 
 ```bash
 python -m app.classifier.label --dry-run    # cost estimate: ~$3.90 for 300 prompts
 python -m app.classifier.label --limit 20   # cheap real subset first
 python -m app.classifier.label              # the full run
 python -m app.classifier.train              # retrain on real labels
+python -m app.classifier.train --balanced   # weight classes inversely to frequency
 ```
 
 Needs `ANTHROPIC_API_KEY` and `MOCK_TIERS=false`. Progress checkpoints after every prompt, so an interrupted run resumes rather than re-spending; `--fresh` discards and starts over.
