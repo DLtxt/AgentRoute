@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: balancer
+spec:
+  # Two replicas so the tier in front of an autoscaling backend is not itself a
+  # single point of failure. This mirrors how a real ingress tier is deployed.
+  replicas: 2
+  selector:
+    matchLabels: {app: balancer}
+  template:
+    metadata:
+      labels: {app: balancer}
+    spec:
+      containers:
+        - name: balancer
+          image: ai-router-balancer:latest
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "app.load_balancer:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - containerPort: 8080
+          env:
+            # Resolved against the headless Service, so this returns every
+            # gateway pod IP and the pool tracks scale events.
+            - name: GATEWAY_HOST
+              value: "gateway"
+            - name: GATEWAY_PORT
+              value: "8000"
+            - name: LB_STRATEGY
+              value: "least_connections"
+            - name: LB_HEALTH_INTERVAL_SECONDS
+              value: "2"
+            # Only for aggregating the in-flight gauge that KEDA scales on.
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            # Reports not-ready when no replica can take traffic, so a balancer
+            # with an empty pool is removed from its own Service.
+            httpGet: {path: /readyz, port: 8080}
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 100m, memory: 96Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: balancer
+spec:
+  selector: {app: balancer}
+  ports:
+    - port: 8080
+      targetPort: 8080

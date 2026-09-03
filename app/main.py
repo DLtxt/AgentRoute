@@ -8,9 +8,14 @@ model call.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import os
+import socket
 import time
 import uuid
+from collections import deque
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request, Response, status
@@ -29,6 +34,60 @@ from app.tiers.base import TierNotAvailable, TierUpstreamError, estimate_cost, e
 from app.tiers.registry import TierRegistry, build_registry
 
 log = logging.getLogger("gateway")
+
+
+# Each pod publishes its own in-flight gauge under this prefix. The key
+# carries a short TTL so a pod that dies stops counting within seconds instead
+# of inflating the total forever -- the leak that ruled out the Redis
+# list-length approach in the first place.
+# One hash, one field per pod -- not one key per pod. Reading per-pod keys
+# meant SCAN MATCH, which walks the whole keyspace and filters client-side. That
+# is O(total keys), and this Redis also holds the response cache: under load the
+# cache grew past fifty thousand entries, the metric scrape slowed until KEDA's
+# poll timed out, and the autoscaler lost its signal precisely when load was
+# highest. HGETALL over one hash is O(pods).
+INFLIGHT_KEY = "inflight"
+INFLIGHT_TTL_SECONDS = 6
+INFLIGHT_SAMPLE_SECONDS = 0.5
+# Publish a rolling mean rather than the instantaneous count. In-flight is a
+# gauge that swings hard between samples -- one measured run saw it read 35,
+# then 4, then 1.75 within thirty seconds under steady load -- and an autoscaler
+# fed that signal adds and removes pods chasing noise. Averaging over ten
+# seconds tracks sustained pressure and ignores momentary spikes.
+INFLIGHT_WINDOW_SECONDS = 10.0
+
+
+async def _publish_inflight(app: FastAPI) -> None:
+    """Publish this pod's smoothed in-flight load to Redis once a second.
+
+    Autoscaling needs the total across every gateway pod. An in-process counter
+    can only report one pod's share, and any HTTP endpoint serving it is
+    reached through a Service that picks a backend at random -- so a scraper
+    would sample one pod and call it the cluster. Redis is the one place every
+    pod can write and any component can read the whole picture.
+    """
+    identity = os.getenv("HOSTNAME") or socket.gethostname()
+    window = max(1, int(INFLIGHT_WINDOW_SECONDS / INFLIGHT_SAMPLE_SECONDS))
+    samples: deque[int] = deque(maxlen=window)
+    ticks = 0
+    while True:
+        try:
+            samples.append(app.state.stats.in_flight)
+            ticks += 1
+            # Sample twice as often as we publish, so the value written is not
+            # decided by whichever instant the publish happened to land on.
+            if ticks % 2 == 0:
+                mean = sum(samples) / len(samples)
+                # Hash fields carry no TTL, so the write timestamp travels with
+                # the value and readers drop stale pods themselves. A pod that
+                # dies stops counting within INFLIGHT_TTL_SECONDS rather than
+                # inflating the total forever.
+                await app.state.redis.hset(INFLIGHT_KEY, identity, f"{mean:.3f}:{time.time():.0f}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a metrics blip must not kill serving
+            log.warning("inflight.publish_failed", extra={"error": str(exc)})
+        await asyncio.sleep(INFLIGHT_SAMPLE_SECONDS)
 
 
 @asynccontextmanager
@@ -51,6 +110,8 @@ async def lifespan(app: FastAPI):
     app.state.classifier = build_classifier(settings.classifier)
     app.state.auth = build_auth_config(settings.gateway_api_keys, settings.rate_limit_per_minute)
 
+    publisher = asyncio.create_task(_publish_inflight(app))
+
     log.info(
         "gateway.startup",
         extra={
@@ -64,6 +125,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        publisher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await publisher
         await app.state.tiers.aclose()
         await redis.aclose()
         log.info("gateway.shutdown")

@@ -17,6 +17,8 @@ What is built, how it works, and what is not built yet. Operational instructions
 - [Dataset and training](#dataset-and-training)
 - [Observability](#observability)
 - [Deployment topology](#deployment-topology)
+- [Kubernetes](#kubernetes)
+- [Autoscaling](#autoscaling)
 - [Configuration contract](#configuration-contract)
 - [Continuous integration](#continuous-integration)
 - [Tests](#tests)
@@ -31,10 +33,10 @@ What is built, how it works, and what is not built yet. Operational instructions
 | 1 | Gateway, tier interface, mock mode, cache, stats, structured logging, live tiers | Complete |
 | 2 | Load balancer, circuit breaker, retry, capability guardrails | Complete |
 | 3 | ML classifier pipeline, auth, rate limiting, CI | Complete |
-| 4 | Kubernetes manifests, KEDA autoscaling | Not started |
+| 4 | Kubernetes manifests, KEDA autoscaling | Complete |
 | Appendix | Cloud deployment | Not started |
 
-Everything runs on Docker Compose. Phase 4 targets `kind`, which is a local Kubernetes cluster — no cloud account is involved at any point.
+Everything runs locally: Docker Compose for the inner loop, `kind` for the Kubernetes deployment. `kind` runs a real cluster in Docker containers on the machine, so no cloud account is involved at any point.
 
 ---
 
@@ -206,6 +208,51 @@ Images: the gateway image is 187 MB by default and 1.27 GB with `INSTALL_ML=true
 
 ---
 
+## Kubernetes
+
+Manifests under `k8s/`, applied with Kustomize. `kind-config.yaml` defines a three-node cluster; the nodes are containers on one Docker host, so this gives real scheduling semantics rather than real capacity.
+
+| Object | Notes |
+|---|---|
+| `redis` Deployment + Service | One replica, no persistence |
+| `gateway` Deployment | Two replicas as a floor; KEDA owns the count |
+| `gateway` Service | **Headless** (`clusterIP: None`) so DNS returns every pod IP |
+| `gateway-direct` Service | Ordinary ClusterIP over the same pods, for comparison |
+| `balancer` Deployment + Service | Two replicas, so the tier in front of an autoscaling backend is not itself a single point of failure |
+| `balancer-nodeport` | Local overlay only; kind maps host 8000 to node port 30080 |
+| `router-config` ConfigMap | Non-secret configuration |
+| `router-secrets` Secret | Only `ANTHROPIC_API_KEY` and `GATEWAY_API_KEYS` |
+
+The gateway Service is headless because the balancer's discovery resolves a name to every address behind it. A normal ClusterIP resolves to one virtual IP, which would collapse the pool to a single entry and hide every scale event.
+
+The Secret carries only the two secret keys. Building it with `--from-env-file=.env` loads every line of `.env`, and because `secretRef` follows `configMapRef` in the pod spec, any overlapping key silently overrides the ConfigMap — a developer's `MOCK_TIERS=false` would put the whole cluster into live mode. `make k8s-secret` copies only the two.
+
+Probes reuse the endpoints the custom balancer already polls: `/healthz` for liveness, `/readyz` for readiness. Every pod carries resource requests and memory limits.
+
+Images are side-loaded with `kind load docker-image`, since kind nodes cannot see the host's Docker daemon.
+
+---
+
+## Autoscaling
+
+KEDA `ScaledObject` on the gateway Deployment, 2 to 8 replicas, driven by a `metrics-api` trigger reading `avg_in_flight` from the balancer's `/scale-metric`.
+
+**Why not the Redis list-length scaler.** The obvious choice, but the gateway is synchronous — a client POSTs `/query` and blocks — so nothing is ever enqueued and `LLEN` would sit at zero forever.
+
+**Why the balancer serves the metric.** The scaler reads one number from one URL. Aimed at the gateway Service it would reach one arbitrary pod and report that pod's counter, which says nothing about cluster-wide load.
+
+**Why the value comes from Redis rather than the balancer's own counters.** There are two balancer replicas, and the Service fronting them hands a scraper one at random, so in-process figures report a random fraction of the load. Every gateway pod publishes its own gauge instead, and any balancer returns the same total.
+
+**Why a hash, not a key per pod.** Reading per-pod keys means `SCAN MATCH`, which walks the entire keyspace and filters client-side. This Redis also holds the response cache: under load it grew past fifty thousand entries, the scrape slowed until KEDA's poll timed out, and the autoscaler lost its signal exactly when load was highest. `HGETALL` over one hash is O(pods) — measured at 4–8 ms against a 60,000-key database.
+
+**Why the value is smoothed.** In-flight is a gauge that swings hard between samples; an unsmoothed signal read 35, then 4, then 1.75 within thirty seconds under steady load, and the autoscaler chased the noise. Each pod publishes a ten-second rolling mean. Hash fields carry no TTL, so a write timestamp travels with the value and readers drop pods that have stopped reporting.
+
+Scale-down uses a sixty-second HPA stabilization window. KEDA's own `cooldownPeriod` only applies when scaling to zero; above zero it delegates to the HPA, whose default five-minute window makes a demo look stuck.
+
+Measured: 2 pods to 5 under roughly 200 req/s from three parallel load drivers, settling back to 2 about thirty seconds after load stopped, with 10 failed requests out of ~29,500 during pod churn.
+
+---
+
 ## Configuration contract
 
 Every service address and secret comes from an environment variable; nothing reads a host path or assumes a working directory. `.env` is loaded for host-run tools and read natively by Compose, with real environment variables taking precedence.
@@ -243,12 +290,11 @@ Images are built multi-arch (`linux/amd64,linux/arm64`) in CI, since development
 | `test_tiers.py` | Model ids, pricing arithmetic |
 | `test_label.py` | Judge verdict parsing, empty-response handling |
 | `test_inspect.py` | Audit loading, conflict detection |
+| `test_load_balancer.py` | Also covers the scale metric averaging over healthy replicas |
 
 ---
 
 ## Not built
-
-**Phase 4** — Kubernetes manifests, Kustomize overlays, KEDA `ScaledObject`. The scaling signal is decided: a `metrics-api` scaler against `/scale-metric`, because the gateway is synchronous and nothing is ever enqueued, so a Redis list-length scaler would sit at zero. The balancer's DNS discovery carries over to Kubernetes but needs a headless Service, since a normal ClusterIP resolves to one virtual IP.
 
 **Cloud deployment** — provisioning, cloud overlay, teardown.
 

@@ -2,7 +2,7 @@
 
 A cost-aware LLM request router. It classifies each incoming query and dispatches it to the cheapest model tier that can handle it, with response caching, a hand-built load balancer, capability guardrails, authentication, and rate limiting.
 
-Everything runs locally. See [`plan.md`](plan.md) for what is implemented.
+Everything runs locally, on Docker Compose or on a local Kubernetes cluster with autoscaling. See [`plan.md`](plan.md) for what is implemented.
 
 ---
 
@@ -70,6 +70,7 @@ Copy `.env.example` to `.env` and edit. Docker Compose reads it automatically; h
 | `LB_FAILURE_THRESHOLD` | `3` | Consecutive failures before a circuit opens |
 | `LB_COOLDOWN_SECONDS` | `30` | Time before a half-open probe |
 | `LB_UPSTREAM_TIMEOUT_SECONDS` | `120` | How long to wait on a replica |
+| `REDIS_URL` | `redis://redis:6379/0` | Cache, rate limits, and the autoscaling gauge |
 
 ---
 
@@ -229,6 +230,57 @@ ruff format --check app tests load
 
 ---
 
+## Kubernetes
+
+`kind` runs a real Kubernetes cluster in Docker on your machine. No cloud account is involved.
+
+Compose and the cluster both bind host port 8000, so stop Compose first.
+
+```bash
+make kind-up        # create the cluster, build images, load them onto the nodes
+make k8s-apply      # secret from .env, then manifests
+make k8s-keda       # install KEDA and the ScaledObject
+make k8s-status
+```
+
+The same endpoints answer on the same port:
+
+```bash
+curl -s localhost:8000/readyz
+curl -s -X POST localhost:8000/query -H 'content-type: application/json' \
+  -d '{"prompt":"What is the capital of France?"}' | jq
+```
+
+### Watching it autoscale
+
+```bash
+kubectl get pods -w                 # in one shell
+make k8s-scale-demo                 # in another
+```
+
+The gateway scales from 2 pods toward 8 as load rises and back to 2 when it stops. One load-driver process is not enough to trigger it — run three in parallel:
+
+```bash
+for i in 1 2 3; do python load/driver.py --duration 150 --concurrency 40 & done; wait
+```
+
+Useful while it runs:
+
+```bash
+curl -s localhost:8000/scale-metric        # what KEDA reads
+kubectl get hpa                            # current metric against target
+kubectl get scaledobject
+curl -s localhost:8000/stats | jq '[.replicas[] | {url, requests}]'
+```
+
+`/stats` shows the balancer discovering pods as KEDA creates them, since it resolves the headless Service each health-check cycle.
+
+### Tear down
+
+```bash
+make kind-down
+```
+
 ## Load testing
 
 Always run against mock mode.
@@ -271,4 +323,9 @@ tests/                    Test suite
 load/driver.py            Load generator
 data/                     Labeled dataset
 models/                   Trained models (gitignored)
+k8s/
+  base/                   Deployments, Services, ConfigMap, Secret
+  overlays/local/         NodePort for kind
+  keda/scaledobject.yaml  Autoscaling trigger
+kind-config.yaml          Three-node local cluster
 ```

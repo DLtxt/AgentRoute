@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+spec:
+  # KEDA owns this number once the ScaledObject exists; 2 is the floor.
+  replicas: 2
+  selector:
+    matchLabels: {app: gateway}
+  template:
+    metadata:
+      labels: {app: gateway}
+    spec:
+      containers:
+        - name: gateway
+          image: ai-router-gateway:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: {name: router-config}
+            - secretRef: {name: router-secrets}
+          env:
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
+          # The same endpoints the custom balancer polls. Liveness asks whether
+          # the process is alive; readiness asks whether it can serve, which
+          # includes Redis being reachable. Conflating them would restart a pod
+          # for a dependency outage it cannot fix by restarting.
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8000}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8000}
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+---
+# Headless: clusterIP None makes DNS return every pod IP rather than one
+# virtual IP. The balancer's discovery resolves this name and reconciles its
+# replica set from the answer, so a normal ClusterIP would collapse the pool to
+# a single entry and the balancer would never see a scale event.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+spec:
+  clusterIP: None
+  selector: {app: gateway}
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+# A second, ordinary Service over the same pods. Nothing routes through it by
+# default; it exists so the balancer path and the plain-Service path can be
+# measured against each other under identical load.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-direct
+spec:
+  selector: {app: gateway}
+  ports:
+    - port: 8000
+      targetPort: 8000

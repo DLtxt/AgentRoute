@@ -21,11 +21,16 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
+from redis.asyncio import Redis
 
 from app.balancer.pool import NoReplicasAvailable, ReplicaPool, Strategy
 from app.logging_config import configure_logging
 
 log = logging.getLogger("balancer")
+
+# Must match the gateway's publisher.
+INFLIGHT_KEY = "inflight"
+INFLIGHT_TTL_SECONDS = 6
 
 
 # Hop-by-hop headers are connection-scoped and must not be forwarded to the
@@ -97,6 +102,10 @@ async def lifespan(app: FastAPI):
     # and lowering this is what makes the circuit breaker observable live.
     upstream_timeout = float(os.getenv("LB_UPSTREAM_TIMEOUT_SECONDS", "120"))
     app.state.client = httpx.AsyncClient(timeout=httpx.Timeout(upstream_timeout, connect=5.0))
+    # Used only to aggregate the cluster-wide in-flight gauge for KEDA.
+    app.state.redis = Redis.from_url(
+        os.getenv("REDIS_URL", "redis://redis:6379/0"), decode_responses=True
+    )
     app.state.started_at = time.time()
     app.state.dispatched = 0
     app.state.rejected = 0
@@ -116,6 +125,7 @@ async def lifespan(app: FastAPI):
         with contextlib.suppress(asyncio.CancelledError):
             await task
         await app.state.client.aclose()
+        await app.state.redis.aclose()
         log.info("balancer.shutdown")
 
 
@@ -145,6 +155,57 @@ async def readyz(request: Request, response: Response) -> dict:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {"status": "not ready", "available_replicas": 0}
     return {"status": "ready", "available_replicas": len(usable)}
+
+
+@app.get("/scale-metric")
+async def scale_metric(request: Request) -> dict:
+    """Cluster-wide in-flight concurrency, for KEDA's metrics-api scaler.
+
+    Read from Redis, not from this process's counters. Two balancer replicas
+    each see roughly half the traffic, and the Service fronting them hands a
+    scraper one of them at random -- so an in-process figure reports a random
+    fraction of the load and KEDA scales on noise. Every gateway pod publishes
+    its own gauge to Redis, so the total is the same regardless of which
+    balancer answers.
+
+    KEDA scales on `avg_in_flight`: per-pod load is what should hold steady as
+    pods are added, whereas a total keeps climbing and never settles.
+    """
+    redis: Redis = request.app.state.redis
+    total = 0.0
+    pods = 0
+    cutoff = time.time() - INFLIGHT_TTL_SECONDS
+    try:
+        # HGETALL over one hash: O(pods), and unaffected by how many cache
+        # entries share this Redis.
+        raw = await redis.hgetall(INFLIGHT_KEY)
+        stale = []
+        for pod, value in raw.items():
+            try:
+                mean, written = value.split(":")
+                if float(written) < cutoff:
+                    stale.append(pod)
+                    continue
+                total += float(mean)
+                pods += 1
+            except (ValueError, AttributeError):
+                stale.append(pod)
+        if stale:
+            await redis.hdel(INFLIGHT_KEY, *stale)
+    except Exception as exc:  # noqa: BLE001
+        # Reported by cause, not as "Redis unavailable", which once hid a
+        # value-parsing bug behind a message about the connection.
+        log.warning(
+            "scale_metric.failed",
+            extra={"error": str(exc), "error_type": type(exc).__name__},
+        )
+        return {"in_flight_total": 0.0, "reporting_pods": 0, "avg_in_flight": 0.0}
+
+    return {
+        "in_flight_total": round(total, 3),
+        "reporting_pods": pods,
+        "avg_in_flight": round(total / pods, 3) if pods else 0.0,
+    }
 
 
 @app.get("/stats")

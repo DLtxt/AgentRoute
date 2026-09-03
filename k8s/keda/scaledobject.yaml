@@ -1,0 +1,39 @@
+# KEDA scales the gateway, not Ollama and not Redis. The gateway is stateless
+# and ~150MB per pod; Ollama loads its own copy of the model weights per replica
+# and Redis is a shared cache that scaling would fragment.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: gateway
+spec:
+  scaleTargetRef:
+    name: gateway
+  minReplicaCount: 2
+  maxReplicaCount: 8
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          # KEDA's own cooldownPeriod only applies when scaling to zero. Above
+          # zero it delegates to the HPA, whose default scale-down window is
+          # five minutes -- long enough that a demo looks stuck. Sixty seconds
+          # keeps the settle visible without removing pods during a lull in
+          # traffic that has not actually ended; at thirty it scaled down while
+          # load was still running. Production would want the default back.
+          stabilizationWindowSeconds: 60
+        scaleUp:
+          stabilizationWindowSeconds: 0
+  triggers:
+    # metrics-api, not the Redis list-length scaler. The obvious choice would be
+    # a Redis list, but the gateway is synchronous -- a client POSTs /query and
+    # blocks -- so nothing is ever enqueued and LLEN would sit at zero forever.
+    #
+    # The URL points at the balancer rather than the gateway because the scaler
+    # reads one number from one endpoint: aimed at the gateway Service it would
+    # reach one arbitrary pod and report that pod's counter. The balancer is the
+    # only component that knows the total.
+    - type: metrics-api
+      metadata:
+        targetValue: "4"
+        url: "http://balancer.default.svc.cluster.local:8080/scale-metric"
+        valueLocation: "avg_in_flight"

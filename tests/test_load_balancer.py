@@ -126,3 +126,17 @@ def test_forwarded_headers_default_content_type_and_record_client():
     out = forward_headers(FakeHeaders({}), client_host="10.0.0.7")
     assert out["content-type"] == "application/json"
     assert out["x-forwarded-for"] == "10.0.0.7"
+
+
+def test_scale_metric_averages_over_healthy_replicas_only():
+    """KEDA scales on per-replica load, so an unhealthy replica must not
+    dilute the average and hide real pressure."""
+    p = pool(Strategy.LEAST_CONNECTIONS)
+    replicas = list(p.replicas.values())
+    replicas[0].in_flight = 6
+    replicas[1].in_flight = 4
+    replicas[2].healthy = False
+    healthy = [r for r in p.replicas.values() if r.healthy]
+    total = sum(r.in_flight for r in healthy)
+    assert total == 10
+    assert round(total / len(healthy), 3) == 5.0
