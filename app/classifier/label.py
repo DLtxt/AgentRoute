@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import random
 import re
 import sys
@@ -69,6 +70,7 @@ JUDGE_CLIP_CHARS = 6000
 # raise the budget: the task is a three-line classification that does not need
 # extended reasoning, and at ~1500 thinking tokens per call across 300 prompts
 # it would have cost more than the answers being graded.
+AUDIT_SUFFIX = ".audit.jsonl"
 JUDGE_MAX_TOKENS = 256
 JUDGE_THINKING = {"type": "disabled"}
 
@@ -150,7 +152,7 @@ def synthetic_labels(prompts: list[str], seed: int = 7) -> list[LabeledPrompt]:
 
 async def judge(
     client, prompt: str, local_answers: list[str], haiku: str, sonnet: str
-) -> dict[TierName, bool]:
+) -> tuple[dict[TierName, bool], str]:
     padded = (local_answers + ["(no answer)"] * LOCAL_SAMPLES)[:LOCAL_SAMPLES]
     message = await client.messages.create(
         model=JUDGE_MODEL,
@@ -190,11 +192,12 @@ async def judge(
     passes = sum(1 for v in votes if v)
     # A marker the judge did not rule on counts as unacceptable: assuming
     # success on a missing verdict would bias labels toward the cheap tier.
-    return {
+    verdicts = {
         TierName.LOCAL: passes * 2 > LOCAL_SAMPLES,
         TierName.HAIKU: bool(verdict("B")),
         TierName.SONNET: bool(verdict("C")),
     }
+    return verdicts, text.strip()
 
 
 TIER_SEQUENCE = (TierName.LOCAL, TierName.HAIKU, TierName.SONNET)
@@ -242,6 +245,7 @@ async def label_prompts(prompts: list[str], out: Path) -> list[LabeledPrompt]:
     if discarded:
         print(f"Discarding {discarded} synthetic placeholder rows.")
 
+    audit_path = out.with_suffix(out.suffix + AUDIT_SUFFIX)
     truncations: dict[str, int] = {t.value: 0 for t in TIER_SEQUENCE}
     skipped = 0
 
@@ -262,7 +266,9 @@ async def label_prompts(prompts: list[str], out: Path) -> list[LabeledPrompt]:
             sonnet_answer = await generate(registry, TierName.SONNET, prompt, i, truncations)
 
             try:
-                verdicts = await judge(client, prompt, local_answers, haiku_answer, sonnet_answer)
+                verdicts, raw_verdict = await judge(
+                    client, prompt, local_answers, haiku_answer, sonnet_answer
+                )
             except JudgeUnusable as exc:
                 print(f"\n  [{i}] JUDGE FAILED: {exc}")
                 print("  Stopping: continuing would record made-up labels.")
@@ -274,12 +280,33 @@ async def label_prompts(prompts: list[str], out: Path) -> list[LabeledPrompt]:
                 continue
             rows.append(LabeledPrompt(prompt, cheapest, source="outcome"))
             write_dataset(rows, out)  # checkpoint every prompt
+
+            # Append the evidence behind this label so it can be audited.
+            with audit_path.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    json.dumps(
+                        {
+                            "prompt": prompt,
+                            "label": cheapest.value,
+                            "verdicts": {t.value: verdicts[t] for t in TIER_SEQUENCE},
+                            "judge_raw": raw_verdict,
+                            "answers": {
+                                "local": local_answers,
+                                "haiku": haiku_answer,
+                                "sonnet": sonnet_answer,
+                            },
+                        }
+                    )
+                    + "\n"
+                )
             print(f"  [{i}/{len(todo)}] {cheapest.value:<7} {prompt[:60]}")
     finally:
         await registry.aclose()
         await client.close()
         if skipped:
             print(f"\nSkipped {skipped} prompts with no acceptable answer.")
+        print(f"Evidence for every label written to {audit_path}")
+        print("Inspect it with: python -m app.classifier.inspect")
         if any(truncations.values()):
             print(f"Truncated answers by tier: {truncations}")
             print(

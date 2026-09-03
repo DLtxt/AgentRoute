@@ -175,6 +175,9 @@ Cache hits are authorized too, against the tier recorded on the entry.
 - Every tier receives the same concision instruction and a token budget large enough to finish, since an answer truncated mid-sentence grades as wrong.
 - The judge runs with thinking disabled and returns five labeled verdicts, parsed by marker rather than line position. An empty judge response aborts the run instead of recording labels.
 - Progress checkpoints after every prompt. Re-running resumes; `--fresh` starts over; `--synthetic` writes placeholders with no API calls.
+- Each label is written alongside its evidence — every tier's answer and the judge's raw verdicts — to a `.audit.jsonl` sidecar, so a label can be checked rather than trusted.
+
+**Inspection** (`app/classifier/inspect.py`) — reports class balance, distinct feature vectors, conflicting rows, and the achievable ceiling, warning when a class is absent or under 10% and when many rows share features but disagree on the label. `--show N` prints the full evidence behind one label; `--conflicts` lists groups of identical features with disagreeing labels; `--samples` and `--label` filter the rows.
 
 **Training** (`app/classifier/train.py`) — logistic regression as the baseline, then XGBoost, on the same features and the same split. Reports both confusion matrices with the held-out sample size, feature importance, and each model's accuracy against the majority-class baseline and the achievable ceiling. `--balanced` applies inverse-frequency class weights. Models and metrics are written to `models/`.
 
@@ -239,6 +242,7 @@ Images are built multi-arch (`linux/amd64,linux/arm64`) in CI, since development
 | `test_classifier_select.py` | Selection, fallback, feature-set mismatch, corrupt model |
 | `test_tiers.py` | Model ids, pricing arithmetic |
 | `test_label.py` | Judge verdict parsing, empty-response handling |
+| `test_inspect.py` | Audit loading, conflict detection |
 
 ---
 

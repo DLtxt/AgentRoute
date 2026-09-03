@@ -203,6 +203,20 @@ The run checkpoints after every prompt and resumes if interrupted. `--fresh` dis
 
 `train.py` prints the majority-class baseline and the achievable ceiling next to each model's accuracy.
 
+### Checking a labeling run
+
+Every label is written with the evidence behind it — each tier's answer and the judge's verdicts — to `data/labeled_prompts.csv.audit.jsonl`.
+
+```bash
+python -m app.classifier.inspect                  # class balance, separability, warnings
+python -m app.classifier.inspect --samples 3      # example rows per label, with verdicts
+python -m app.classifier.inspect --conflicts      # identical features, disagreeing labels
+python -m app.classifier.inspect --label sonnet   # every row with one label
+python -m app.classifier.inspect --show 3         # full answers and judge output for one row
+```
+
+The summary warns when a class is missing or under 10% of the data, and when many rows share a feature vector but disagree on the label — both mean a model cannot learn from what is there. `--show` is how you check a label you doubt: it prints what each tier actually answered and what the judge said about it.
+
 ---
 
 ## Testing
