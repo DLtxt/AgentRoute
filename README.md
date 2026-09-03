@@ -296,9 +296,7 @@ Measured over four trials, one gateway pod deleted with `--grace-period=0 --forc
 | 4 | 1 failed / 34,482 | 0 failed / 60,370 |
 | **total** | **1 / 108,959** | **40 / 133,701** |
 
-The Service dropped requests in three of four trials; the balancer in one. Tail latency also differed — the balancer held p95 between 430 ms and 585 ms while the Service ranged 221 ms to 1391 ms, spiking when it routed at a pod that was already dying.
-
-A Kubernetes Service balances at L4 and has neither retry nor circuit breaking, so requests already dispatched to a failing pod surface to the client. The balancer polls `/readyz`, takes the pod out of rotation, and re-sends in flight requests to a healthy replica. Four trials is a small sample and trial 4 is an outlier, so treat the ratio as indicative rather than precise.
+A Kubernetes Service balances at L4 and has neither retry nor circuit breaking, so requests already dispatched to a failing pod surface to the client. The balancer polls `/readyz`, takes the pod out of rotation, and re-sends in flight requests to a healthy replica. Four trials is a small sample due to limited compute, so treat this as an example rather than groundtruth. 
 
 ### Tear down
 
