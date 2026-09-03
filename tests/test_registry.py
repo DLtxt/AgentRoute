@@ -7,29 +7,26 @@ would make the free tier depend on a paid account.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.tiers.base import MockTier, TierName, TierNotAvailable
 from app.tiers.registry import build_registry
 
 
 def settings(**overrides) -> Settings:
-    base = dict(
-        redis_url="redis://localhost:6379/0",
-        ollama_url="http://localhost:11434",
-        mock_tiers=True,
-        cache_ttl_seconds=60,
-        cache_schema_version="v1",
-        classifier="rules",
-        log_level="INFO",
-        anthropic_api_key=None,
-        ollama_model="llama3.2:3b",
-        ollama_timeout_seconds=120.0,
-        max_tokens=1024,
-        sonnet_thinking="adaptive",
-    )
-    return Settings(**{**base, **overrides})
+    """Build Settings from the real defaults, then override.
+
+    Deriving from get_settings() rather than a hand-written dict means adding a
+    field to Settings does not break every test in this file -- which is exactly
+    what happened when auth settings were introduced.
+    """
+    get_settings.cache_clear()
+    base = get_settings()
+    get_settings.cache_clear()
+    return replace(base, **overrides)
 
 
 def test_mock_mode_builds_every_tier_without_credentials():

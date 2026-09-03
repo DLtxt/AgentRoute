@@ -69,14 +69,10 @@ async def worker(
                 results["by_tier"][tier] = results["by_tier"].get(tier, 0) + 1
             else:
                 results["failed"] += 1
-                results["statuses"][r.status_code] = (
-                    results["statuses"].get(r.status_code, 0) + 1
-                )
+                results["statuses"][r.status_code] = results["statuses"].get(r.status_code, 0) + 1
         except httpx.HTTPError as exc:
             results["failed"] += 1
-            results["errors"][type(exc).__name__] = (
-                results["errors"].get(type(exc).__name__, 0) + 1
-            )
+            results["errors"][type(exc).__name__] = results["errors"].get(type(exc).__name__, 0) + 1
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -124,8 +120,13 @@ async def main() -> None:
         await asyncio.gather(
             *(
                 worker(
-                    client, f"{args.host}/query", counter, deadline,
-                    results, run_tag, args.mix,
+                    client,
+                    f"{args.host}/query",
+                    counter,
+                    deadline,
+                    results,
+                    run_tag,
+                    args.mix,
                 )
                 for _ in range(args.concurrency)
             )
@@ -149,9 +150,7 @@ async def main() -> None:
         f"p95 {percentile(lat, 95):.0f}ms  p99 {percentile(lat, 99):.0f}ms"
     )
     if args.mix and results["by_tier"]:
-        spread = "  ".join(
-            f"{t}={results['by_tier'].get(t, 0)}" for t, _ in MIXED_SHAPES
-        )
+        spread = "  ".join(f"{t}={results['by_tier'].get(t, 0)}" for t, _ in MIXED_SHAPES)
         print(f"tier mix    {spread}")
 
 

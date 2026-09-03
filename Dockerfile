@@ -5,9 +5,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /srv
 
+# The ML stack is opt-in. It roughly triples the image, and the gateway only
+# needs it when CLASSIFIER is logreg or xgb -- so the default image stays lean
+# for the rules path, for CI, and for every kind node that pulls it in Phase 4.
+#   docker compose build --build-arg INSTALL_ML=true
+ARG INSTALL_ML=false
+
 # Dependencies first, so application edits don't invalidate the layer.
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-ml.txt ./
+RUN pip install --no-cache-dir -r requirements.txt && \
+    if [ "$INSTALL_ML" = "true" ]; then \
+        pip install --no-cache-dir -r requirements-ml.txt; \
+    fi
 
 COPY app ./app
 

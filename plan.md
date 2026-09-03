@@ -273,6 +273,8 @@ For command-line *tools* you run rather than import (`ruff`, `pytest`, `httpie`)
 
 ## Phase 3 — ML, tests, CI
 
+**Status: pipeline complete; the labeling run is still pending an API key.**
+
 - **Build the labeled dataset by outcome, not intuition.** Collect ~300 prompts, run each through all three tiers, compare outputs, label each with *the cheapest tier that produced an acceptable answer*. This costs about $2.50 in API spend. Budget the *human* time honestly: 300 prompts × 3 tiers is 900 generations to read and adjudicate. That is the real cost of this step, and it is worth paying — it's the difference between a real dataset and a model trained to predict your own guesses. If you want to cut the reading down without cutting the dataset, have Sonnet pre-grade and hand-review only the disagreements.
 - Train logistic regression as a baseline, then XGBoost. Same hand-crafted features. Report both confusion matrices — having the baseline is what makes the XGBoost choice defensible instead of decorative. **Print the held-out sample size next to the matrices**; with ~300 samples across 3 classes the test set is small enough that a narrow win may not be a real result, and saying so is the stronger answer.
 - Keep classifier selection behind `CLASSIFIER=rules|logreg|xgb` so all three are A/B-able at runtime

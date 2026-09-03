@@ -35,9 +35,7 @@ class Stats:
     cache_hits: int = 0
     cache_misses: int = 0
     cost_avoided_by_cache_usd: float = 0.0
-    hits_by_origin_tier: dict[str, int] = field(
-        default_factory=lambda: defaultdict(int)
-    )
+    hits_by_origin_tier: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     tiers: dict[str, TierStats] = field(
         default_factory=lambda: {t.value: TierStats() for t in TierName}
     )

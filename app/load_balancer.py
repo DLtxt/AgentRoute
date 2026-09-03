@@ -28,6 +28,35 @@ from app.logging_config import configure_logging
 log = logging.getLogger("balancer")
 
 
+# Hop-by-hop headers are connection-scoped and must not be forwarded to the
+# upstream; host and content-length are recomputed by httpx for the new request.
+# Everything else is passed through -- notably x-api-key, without which
+# authentication cannot work through the proxy at all.
+_STRIPPED_HEADERS = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "host",
+        "content-length",
+    }
+)
+
+
+def forward_headers(incoming, client_host: str | None = None) -> dict[str, str]:
+    headers = {k: v for k, v in incoming.items() if k.lower() not in _STRIPPED_HEADERS}
+    headers.setdefault("content-type", "application/json")
+    if client_host:
+        headers["x-forwarded-for"] = client_host
+    return headers
+
+
 def _int(name: str, default: int) -> int:
     raw = os.getenv(name)
     return int(raw) if raw and raw.strip() else default
@@ -67,9 +96,7 @@ async def lifespan(app: FastAPI):
     # but tunable: a hung replica should not hold a connection open forever,
     # and lowering this is what makes the circuit breaker observable live.
     upstream_timeout = float(os.getenv("LB_UPSTREAM_TIMEOUT_SECONDS", "120"))
-    app.state.client = httpx.AsyncClient(
-        timeout=httpx.Timeout(upstream_timeout, connect=5.0)
-    )
+    app.state.client = httpx.AsyncClient(timeout=httpx.Timeout(upstream_timeout, connect=5.0))
     app.state.started_at = time.time()
     app.state.dispatched = 0
     app.state.rejected = 0
@@ -155,6 +182,7 @@ async def proxy_query(request: Request) -> Response:
     pool: ReplicaPool = request.app.state.pool
     client: httpx.AsyncClient = request.app.state.client
     body = await request.body()
+    headers = forward_headers(request.headers, request.client.host if request.client else None)
 
     max_attempts = max(1, min(len(pool.replicas), _int("LB_MAX_ATTEMPTS", 3)))
     tried: set[str] = set()
@@ -168,11 +196,7 @@ async def proxy_query(request: Request) -> Response:
         request.app.state.dispatched += 1
         started = time.perf_counter()
         try:
-            upstream = await client.post(
-                f"{replica.url}/query",
-                content=body,
-                headers={"content-type": "application/json"},
-            )
+            upstream = await client.post(f"{replica.url}/query", content=body, headers=headers)
         except httpx.HTTPError as exc:
             replica.failures += 1
             replica.breaker.record_failure()

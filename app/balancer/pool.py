@@ -81,9 +81,7 @@ class ReplicaPool:
         self._host = discovery_host
         self._port = discovery_port
         self._cursor = 0
-        self.replicas: dict[str, Replica] = {
-            url: self._new_replica(url) for url in self._static
-        }
+        self.replicas: dict[str, Replica] = {url: self._new_replica(url) for url in self._static}
 
     def _new_replica(self, url: str) -> Replica:
         return Replica(
@@ -138,9 +136,7 @@ class ReplicaPool:
     # --- selection -------------------------------------------------------
     def pick(self, exclude: set[str] | None = None) -> Replica:
         exclude = exclude or set()
-        candidates = [
-            r for r in self.replicas.values() if r.available and r.url not in exclude
-        ]
+        candidates = [r for r in self.replicas.values() if r.available and r.url not in exclude]
         if not candidates:
             raise NoReplicasAvailable(
                 f"No replica available out of {len(self.replicas)} known "

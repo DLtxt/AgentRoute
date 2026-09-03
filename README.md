@@ -4,7 +4,7 @@ A cost-aware LLM request router. It classifies each incoming query and dispatche
 
 Everything — including autoscaling — runs on a laptop. Kubernetes is not cloud: `kind` runs a real cluster in Docker containers locally, for free. See [`plan.md`](plan.md) for the full design.
 
-**Status: Phase 2 complete.** The pipeline runs end to end in mock mode with no credentials, and against real models (Ollama locally, Haiku and Sonnet via the Anthropic API) when configured.
+**Status: Phase 3 complete** (pipeline; see the labeling caveat below). The pipeline runs end to end in mock mode with no credentials, and against real models (Ollama locally, Haiku and Sonnet via the Anthropic API) when configured.
 
 ## Quick start
 
@@ -119,6 +119,52 @@ OLLAMA_URL=http://ollama:11434
 ```
 
 Two knobs worth knowing. `MAX_TOKENS` (default 1024) is a cap, not a target — you are billed for what is generated. `SONNET_THINKING` defaults to `adaptive`, which is how Sonnet 5 runs when unconfigured; setting it to `disabled` trades some quality for lower cost and latency.
+
+## Classifier
+
+Three implementations behind one `classify(prompt) -> Decision` interface, switchable at runtime so they can be A/B'd on live traffic:
+
+```bash
+CLASSIFIER=rules   docker compose up -d gateway   # hand-written rules, no model needed
+CLASSIFIER=logreg  docker compose up -d gateway   # baseline
+CLASSIFIER=xgb     docker compose up -d gateway   # gradient boosting
+```
+
+Both ML models use the same hand-crafted features — not embeddings — so a feature-importance chart explains exactly why a prompt routed where it did. The logistic regression is not a formality: it is the baseline that makes choosing XGBoost defensible rather than decorative. If it wins, that is the result.
+
+`logreg` and `xgb` need a trained model **and** the ML stack in the image, which is opt-in because it takes the image from 187 MB to 1.27 GB:
+
+```bash
+python -m app.classifier.train                 # writes models/
+INSTALL_ML=true docker compose build gateway
+INSTALL_ML=true CLASSIFIER=xgb docker compose up -d gateway
+```
+
+Without either, the gateway falls back to rules and logs a warning — a fresh clone still serves, but the downgrade is never silent.
+
+### ⚠️ The models are not yet trained on real labels
+
+`data/labeled_prompts.csv` currently holds **synthetic** labels, written by `--synthetic` to prove the pipeline runs. Every accuracy figure fitted to them is meaningless as a statement about routing quality. `train.py` prints a loud warning and records `trustworthy: false` in `models/metrics.json`.
+
+The real dataset comes from running every prompt through every tier and labeling each with *the cheapest tier that produced an acceptable answer* — a judgment made by outcome, not by intuition. A model trained on intuition labels only learns to reproduce the rule classifier, so comparing the two would measure nothing.
+
+```bash
+python -m app.classifier.label --dry-run    # cost estimate: ~$2.82 for 300 prompts
+python -m app.classifier.label --limit 20   # cheap real subset first
+python -m app.classifier.label              # the full run
+python -m app.classifier.train              # retrain on real labels
+```
+
+Needs `ANTHROPIC_API_KEY` and `MOCK_TIERS=false`. Progress checkpoints after every prompt, so an interrupted run resumes rather than re-spending.
+
+## Gateway auth
+
+```bash
+GATEWAY_API_KEYS=your-key RATE_LIMIT_PER_MINUTE=120 docker compose up -d
+curl -X POST localhost:8000/query -H 'x-api-key: your-key' ...
+```
+
+Empty `GATEWAY_API_KEYS` disables auth entirely — fine locally, never with a public address. The rate limit counts in Redis rather than per process, so the limit is shared across replicas instead of multiplied by them; with three gateways, a per-process counter would have made `120/min` really mean `360/min`, and the number would change every time KEDA scaled.
 
 ## Development
 

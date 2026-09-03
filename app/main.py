@@ -13,12 +13,13 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response, status
+from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 
+from app.auth import authorize, build_auth_config
 from app.cache import Cache
-from app.classifier import rules
+from app.classifier.select import build_classifier
 from app.config import get_settings
 from app.guardrails import CapabilityDenied, Guardrails, load_manifests
 from app.logging_config import configure_logging
@@ -47,12 +48,15 @@ async def lifespan(app: FastAPI):
     app.state.stats = Stats(started_at=time.time())
     app.state.tiers = build_registry(settings)
     app.state.guardrails = Guardrails(load_manifests())
+    app.state.classifier = build_classifier(settings.classifier)
+    app.state.auth = build_auth_config(settings.gateway_api_keys, settings.rate_limit_per_minute)
 
     log.info(
         "gateway.startup",
         extra={
             "mode": settings.mode,
             "classifier": settings.classifier,
+            "auth_enabled": bool(settings.gateway_api_keys),
             "cache_ttl_seconds": settings.cache_ttl_seconds,
             "redis_url": settings.redis_url,
         },
@@ -127,6 +131,7 @@ async def readyz(request: Request, response: Response) -> dict:
 async def stats(request: Request) -> dict:
     return {
         **request.app.state.stats.snapshot(),
+        "classifier": request.app.state.classifier.name,
         "guardrails": request.app.state.guardrails.snapshot(),
     }
 
@@ -143,7 +148,11 @@ async def scale_metric(request: Request) -> dict:
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query(payload: QueryRequest, request: Request) -> QueryResponse:
+async def query(
+    payload: QueryRequest,
+    request: Request,
+    identity: str = Depends(authorize),
+) -> QueryResponse:
     cache: Cache = request.app.state.cache
     st: Stats = request.app.state.stats
 
@@ -191,7 +200,7 @@ async def query(payload: QueryRequest, request: Request) -> QueryResponse:
             )
 
         st.record_miss()
-        decision = rules.classify(payload.prompt)
+        decision = request.app.state.classifier.classify(payload.prompt)
         # Guardrail before dispatch: a refused request must cost no model call.
         request.app.state.guardrails.enforce(
             decision.tier, payload.capabilities, request_id=request_id
@@ -206,6 +215,7 @@ async def query(payload: QueryRequest, request: Request) -> QueryResponse:
             "query.dispatched",
             extra={
                 "request_id": request_id,
+                "identity": identity,
                 "tier": result.tier.value,
                 "reason": decision.reason,
                 "latency_ms": round(latency_ms, 2),

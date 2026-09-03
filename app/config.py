@@ -40,6 +40,8 @@ class Settings:
     ollama_timeout_seconds: float
     max_tokens: int
     sonnet_thinking: str
+    gateway_api_keys: str
+    rate_limit_per_minute: int
 
     @property
     def mode(self) -> str:
@@ -65,4 +67,7 @@ def get_settings() -> Settings:
         max_tokens=_int("MAX_TOKENS", 1024),
         # "adaptive" (the model default) or "disabled". See AnthropicTier.
         sonnet_thinking=os.getenv("SONNET_THINKING", "adaptive"),
+        # Comma-separated. Empty disables auth entirely (local dev only).
+        gateway_api_keys=os.getenv("GATEWAY_API_KEYS", ""),
+        rate_limit_per_minute=_int("RATE_LIMIT_PER_MINUTE", 120),
     )

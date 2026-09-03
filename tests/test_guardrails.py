@@ -51,7 +51,8 @@ def test_file_access_is_denied_on_every_tier(guardrails):
 def test_first_violation_in_a_list_stops_the_check(guardrails):
     with pytest.raises(CapabilityDenied) as exc:
         guardrails.enforce(
-            TierName.LOCAL, ["text_generation", "web_search", "code_execution"],
+            TierName.LOCAL,
+            ["text_generation", "web_search", "code_execution"],
             request_id="r7",
         )
     assert exc.value.capability == "web_search"

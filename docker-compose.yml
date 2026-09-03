@@ -66,7 +66,16 @@ services:
           memory: 256M
 
   gateway:
-    build: .
+    build:
+      context: .
+      args:
+        # true also requires trained models; see the volume below.
+        INSTALL_ML: "${INSTALL_ML:-false}"
+    volumes:
+      # Models are build artifacts, not source, and are gitignored. Mounting
+      # them read-only means retraining takes effect on restart with no image
+      # rebuild. A cluster deployment would bake them in instead.
+      - ./models:/srv/models:ro
     # Three replicas by default, so `docker compose up -d` gives the balancer
     # something to balance without a --scale flag. Passing --scale gateway=N
     # still overrides this; omitting it no longer silently drops back to one.
@@ -84,6 +93,8 @@ services:
       CACHE_TTL_SECONDS: "${CACHE_TTL_SECONDS:-3600}"
       CACHE_SCHEMA_VERSION: "${CACHE_SCHEMA_VERSION:-v1}"
       CLASSIFIER: "${CLASSIFIER:-rules}"
+      GATEWAY_API_KEYS: "${GATEWAY_API_KEYS:-}"
+      RATE_LIMIT_PER_MINUTE: "${RATE_LIMIT_PER_MINUTE:-120}"
       MAX_TOKENS: "${MAX_TOKENS:-1024}"
       SONNET_THINKING: "${SONNET_THINKING:-adaptive}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"

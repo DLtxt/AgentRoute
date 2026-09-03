@@ -76,10 +76,7 @@ class MockTier(Tier):
         started = time.perf_counter()
         await asyncio.sleep(MOCK_LATENCY_MS[self.name] / 1000)
         digest = hashlib.sha256(prompt.encode()).hexdigest()[:8]
-        text = (
-            f"[mock:{self.name.value}] response to prompt {digest} "
-            f"({len(prompt)} chars)"
-        )
+        text = f"[mock:{self.name.value}] response to prompt {digest} ({len(prompt)} chars)"
         input_tokens = estimate_tokens(prompt)
         output_tokens = estimate_tokens(text)
         return TierResponse(

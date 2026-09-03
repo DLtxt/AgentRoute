@@ -34,8 +34,13 @@ def make_cache(mode: str) -> tuple[Cache, FakeRedis]:
 
 def response(tier: TierName = TierName.LOCAL) -> TierResponse:
     return TierResponse(
-        text="hello", tier=tier, input_tokens=3, output_tokens=2,
-        latency_ms=1.0, cost_usd=0.0, mocked=True,
+        text="hello",
+        tier=tier,
+        input_tokens=3,
+        output_tokens=2,
+        latency_ms=1.0,
+        cost_usd=0.0,
+        mocked=True,
     )
 
 

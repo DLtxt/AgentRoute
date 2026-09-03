@@ -11,9 +11,11 @@ import logging
 import sys
 from typing import Any
 
-_RESERVED = set(
-    logging.LogRecord("", 0, "", 0, "", (), None).__dict__
-) | {"message", "asctime", "taskName"}
+_RESERVED = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
+    "message",
+    "asctime",
+    "taskName",
+}
 
 
 class JsonFormatter(logging.Formatter):

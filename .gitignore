@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Trained models are build artifacts, not source. Rebuild with
+# `python -m app.classifier.train`.
+models/

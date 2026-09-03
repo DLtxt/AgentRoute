@@ -69,9 +69,7 @@ class Guardrails:
         self._manifests = manifests
         self.violations = 0
 
-    def enforce(
-        self, tier: TierName, capabilities: list[str], *, request_id: str
-    ) -> None:
+    def enforce(self, tier: TierName, capabilities: list[str], *, request_id: str) -> None:
         manifest = self._manifests[tier]
         for capability in capabilities:
             try:

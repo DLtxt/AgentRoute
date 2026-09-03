@@ -85,3 +85,44 @@ def test_retry_exhausts_cleanly_when_all_replicas_tried():
     tried = {r.url for r in p.replicas.values()}
     with pytest.raises(NoReplicasAvailable, match="already tried"):
         p.pick(exclude=tried)
+
+
+class FakeHeaders(dict):
+    """Mimics Starlette's case-insensitive header mapping closely enough."""
+
+
+def test_forwarded_headers_keep_the_api_key():
+    """Regression: the balancer built a fresh header dict with only
+    content-type, silently dropping x-api-key. Authentication could not work
+    through the proxy at all, and no unit test caught it because they called
+    the auth dependency directly."""
+    from app.load_balancer import forward_headers
+
+    out = forward_headers(FakeHeaders({"x-api-key": "secret", "accept": "*/*"}))
+    assert out["x-api-key"] == "secret"
+    assert out["accept"] == "*/*"
+
+
+def test_forwarded_headers_drop_hop_by_hop_and_recomputed_ones():
+    from app.load_balancer import forward_headers
+
+    out = forward_headers(
+        FakeHeaders(
+            {
+                "host": "localhost:8000",
+                "content-length": "42",
+                "connection": "keep-alive",
+                "transfer-encoding": "chunked",
+                "x-api-key": "secret",
+            }
+        )
+    )
+    assert set(out) == {"x-api-key", "content-type"}
+
+
+def test_forwarded_headers_default_content_type_and_record_client():
+    from app.load_balancer import forward_headers
+
+    out = forward_headers(FakeHeaders({}), client_host="10.0.0.7")
+    assert out["content-type"] == "application/json"
+    assert out["x-forwarded-for"] == "10.0.0.7"
