@@ -56,6 +56,10 @@ class TierResponse:
     latency_ms: float
     cost_usd: float
     mocked: bool = False
+    # True when the model was cut off by max_tokens rather than finishing.
+    # A truncated answer ends mid-sentence and reads as wrong to anything
+    # grading it, so this must be visible rather than silent.
+    truncated: bool = False
 
 
 class Tier(ABC):

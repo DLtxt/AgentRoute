@@ -22,7 +22,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import random
+import re
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from app.classifier.corpus import build_corpus
@@ -31,7 +33,44 @@ from app.config import get_settings
 from app.tiers.base import PRICING, TierName
 from app.tiers.registry import build_registry
 
+
+class JudgeUnusable(RuntimeError):
+    """The grader returned nothing usable -- a tooling failure, not a verdict."""
+
+
 JUDGE_MODEL = "claude-sonnet-5"
+
+# Answers are capped by max_tokens, and a truncated answer ends mid-sentence and
+# reads as wrong to any grader -- which is how the first real run came to skip
+# most of its prompts as "no tier acceptable" when all three tiers had in fact
+# answered well. Two changes prevent that: ask for a short answer, so responses
+# finish naturally well inside the budget, and give a budget large enough that
+# they do. The instruction is identical for every tier, so it constrains them
+# equally and the comparison stays fair.
+ANSWER_INSTRUCTION = (
+    "Answer in at most 150 words. Be complete but concise; do not pad with examples or caveats.\n\n"
+)
+# Generous because Sonnet's own adaptive thinking also draws on this budget.
+# Thinking stays ON for the answering tiers -- it is part of what makes Sonnet
+# the capable tier, and switching it off would understate the very capability
+# the labels are meant to measure. The concision instruction, not a tight cap,
+# is what keeps answers short.
+LABEL_MAX_TOKENS = 1500
+
+# How much of each answer the judge sees. Generous, because clipping an answer
+# before grading recreates the same truncation problem one layer up.
+JUDGE_CLIP_CHARS = 6000
+
+# Sonnet 5 runs adaptive thinking unless told otherwise, and thinking tokens
+# count against max_tokens. Grading three real answers is enough work that the
+# thinking consumed the entire budget and the response came back with NO text
+# at all -- which the parser then read as "every tier unacceptable", silently
+# skipping most of the run. Two reasons to switch it off here rather than just
+# raise the budget: the task is a three-line classification that does not need
+# extended reasoning, and at ~1500 thinking tokens per call across 300 prompts
+# it would have cost more than the answers being graded.
+JUDGE_MAX_TOKENS = 256
+JUDGE_THINKING = {"type": "disabled"}
 
 JUDGE_PROMPT = """You are grading answers from three AI models of increasing \
 capability and cost.
@@ -60,10 +99,12 @@ C: ACCEPTABLE or UNACCEPTABLE"""
 
 def estimate_cost(n: int) -> float:
     """Rough projected spend, so the bill is never a surprise."""
-    gen_in, gen_out = 200, 400
+    # Measured from a sample run: concise answers plus Sonnet's thinking.
+    gen_in, gen_out = 250, 550
     haiku = (gen_in * PRICING[TierName.HAIKU][0] + gen_out * PRICING[TierName.HAIKU][1]) / 1e6
     sonnet = (gen_in * PRICING[TierName.SONNET][0] + gen_out * PRICING[TierName.SONNET][1]) / 1e6
-    judge = (1200 * PRICING[TierName.SONNET][0] + 40 * PRICING[TierName.SONNET][1]) / 1e6
+    # Judge thinking is disabled, so its output is a few dozen tokens.
+    judge = (1800 * PRICING[TierName.SONNET][0] + 40 * PRICING[TierName.SONNET][1]) / 1e6
     return n * (haiku + sonnet + judge)
 
 
@@ -94,7 +135,8 @@ def synthetic_labels(prompts: list[str], seed: int = 7) -> list[LabeledPrompt]:
 async def judge(client, prompt: str, answers: dict[TierName, str]) -> dict[TierName, bool]:
     message = await client.messages.create(
         model=JUDGE_MODEL,
-        max_tokens=64,
+        max_tokens=JUDGE_MAX_TOKENS,
+        thinking=JUDGE_THINKING,
         messages=[
             {
                 "role": "user",
@@ -108,9 +150,24 @@ async def judge(client, prompt: str, answers: dict[TierName, str]) -> dict[TierN
         ],
     )
     text = "".join(b.text for b in message.content if getattr(b, "type", None) == "text")
+    if not text.strip():
+        # Never fail silently here. An empty judge response used to mean every
+        # tier was recorded unacceptable and the prompt skipped, which looked
+        # like the models failing rather than the grader never answering.
+        raise JudgeUnusable(
+            f"Judge returned no text (stop_reason={getattr(message, 'stop_reason', None)!r}, "
+            f"output_tokens={message.usage.output_tokens}). "
+            "Raise JUDGE_MAX_TOKENS or check JUDGE_THINKING."
+        )
+
+    # Match on the A/B/C letter rather than line order. Positional parsing broke
+    # on any preamble or blank line, shifting every verdict by one.
     verdicts: dict[TierName, bool] = {}
-    for line, tier in zip(text.strip().splitlines(), TIER_SEQUENCE, strict=False):
-        verdicts[tier] = "UNACCEPTABLE" not in line.upper()
+    for letter, tier in zip("ABC", TIER_SEQUENCE, strict=True):
+        match = re.search(rf"^\s*{letter}\s*[:.\)-]\s*(\w+)", text, re.MULTILINE)
+        if match:
+            verdicts[tier] = match.group(1).upper().startswith("ACCEPT")
+
     # A tier the judge did not rule on is treated as unacceptable: assuming
     # success on a missing verdict would bias labels toward the cheap tier.
     return {tier: verdicts.get(tier, False) for tier in TIER_SEQUENCE}
@@ -128,7 +185,9 @@ async def label_prompts(prompts: list[str], out: Path) -> list[LabeledPrompt]:
 
     from anthropic import AsyncAnthropic
 
-    registry = build_registry(settings)
+    # Labeling needs more headroom than the gateway's default, so answers
+    # finish rather than being cut off and graded as failures.
+    registry = build_registry(replace(settings, max_tokens=LABEL_MAX_TOKENS))
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     existing = read_dataset(out) if out.exists() else []
@@ -139,6 +198,9 @@ async def label_prompts(prompts: list[str], out: Path) -> list[LabeledPrompt]:
     discarded = len(existing) - len(rows)
     if discarded:
         print(f"Discarding {discarded} synthetic placeholder rows.")
+
+    truncations: dict[str, int] = {t.value: 0 for t in TIER_SEQUENCE}
+    skipped = 0
 
     done = {r.prompt for r in rows}
     todo = [p for p in prompts if p not in done]
@@ -152,14 +214,27 @@ async def label_prompts(prompts: list[str], out: Path) -> list[LabeledPrompt]:
             answers: dict[TierName, str] = {}
             for tier in TIER_SEQUENCE:
                 try:
-                    answers[tier] = (await registry.get(tier).complete(prompt)).text
+                    result = await registry.get(tier).complete(ANSWER_INSTRUCTION + prompt)
+                    answers[tier] = result.text
+                    if result.truncated:
+                        truncations[tier.value] += 1
+                        print(
+                            f"  [{i}] WARNING {tier.value} was truncated at "
+                            f"{result.output_tokens} tokens; its answer will grade badly"
+                        )
                 except Exception as exc:  # noqa: BLE001 - one bad tier must not end the run
                     answers[tier] = ""
                     print(f"  [{i}] {tier.value} failed: {exc}")
 
-            verdicts = await judge(client, prompt, answers)
+            try:
+                verdicts = await judge(client, prompt, answers)
+            except JudgeUnusable as exc:
+                print(f"\n  [{i}] JUDGE FAILED: {exc}")
+                print("  Stopping: continuing would record made-up labels.")
+                break
             cheapest = next((t for t in TIER_SEQUENCE if verdicts[t]), None)
             if cheapest is None:
+                skipped += 1
                 print(f"  [{i}] no tier acceptable, skipping: {prompt[:60]}")
                 continue
             rows.append(LabeledPrompt(prompt, cheapest, source="outcome"))
@@ -168,6 +243,14 @@ async def label_prompts(prompts: list[str], out: Path) -> list[LabeledPrompt]:
     finally:
         await registry.aclose()
         await client.close()
+        if skipped:
+            print(f"\nSkipped {skipped} prompts with no acceptable answer.")
+        if any(truncations.values()):
+            print(f"Truncated answers by tier: {truncations}")
+            print(
+                "Truncation makes an answer look wrong to the judge. Raise "
+                "LABEL_MAX_TOKENS if this count is not near zero."
+            )
     return rows
 
 

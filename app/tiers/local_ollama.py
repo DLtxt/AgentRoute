@@ -72,6 +72,7 @@ class OllamaTier(Tier):
             latency_ms=(time.perf_counter() - started) * 1000,
             cost_usd=estimate_cost(self.name, input_tokens, output_tokens),
             mocked=False,
+            truncated=body.get("done_reason") == "length",
         )
 
     async def aclose(self) -> None:
