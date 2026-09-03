@@ -333,19 +333,6 @@ That gap is real but it is not a gap against *the standard*; it is a gap against
 The more distinctive part. Common LLM routing either sends everything to one model, or routes on a heuristic ("looks like code → big model"), or on embedding similarity to a labelled set.
 
 This routes on **outcome-based labels**: every prompt in the corpus was run through all three tiers and labelled with the cheapest tier that actually produced an acceptable answer, judged by a stronger model, with the weakest tier sampled three times and decided by majority because its quality on borderline prompts is close to a coin flip. The labels describe where capability actually breaks down rather than where a heuristic guesses it does.
-
-Two consequences that fall out of that and are unusual to see stated:
-
-- **The cache is consulted before classification**, so a repeat prompt costs a hash lookup instead of a classifier call plus a model call — and because a cache hit has no classifier verdict, the entry records which tier produced it so the hit can still be authorized. Skipping that makes capability guardrails bypassable by asking once with an allowed capability and again with a denied one.
-- **The measured tier boundary was not where difficulty suggested.** Haiku 4.5 answered 93 of 147 prompts acceptably, including "prove the halting problem is undecidable", leaving only 3 that needed Sonnet. Routing on prompt difficulty would have over-provisioned heavily. That result is a property of the grading rubric as much as the models, and the project says so rather than presenting a tidy three-class split.
-
-### Where it is worse
-
-- No TLS, no connection pooling to backends, no outlier detection, no traffic shifting, no tracing.
-- The balancer adds a userspace hop that a kernel-level Service does not.
-- Rate limiting is a fixed window, not a sliding one, so it permits a burst across a window boundary.
-- The classifier reads eight hand-crafted features; embeddings would almost certainly route better, at the cost of the explainability the feature-importance chart gives.
-
 ---
 
 ## Deploying to a cloud cluster
