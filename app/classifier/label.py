@@ -72,14 +72,28 @@ JUDGE_CLIP_CHARS = 6000
 JUDGE_MAX_TOKENS = 256
 JUDGE_THINKING = {"type": "disabled"}
 
+# The smallest model is sampled several times and graded on a majority vote.
+# Measured: relabelling one prompt three times gave [haiku, haiku, local] --
+# the same prompt, different label, because the small model's answer quality is
+# genuinely borderline rather than because the grader is inconsistent. Voting
+# turns a coin flip into a stable label. It is free: the local tier is Ollama.
+LOCAL_SAMPLES = 3
+
 JUDGE_PROMPT = """You are grading answers from three AI models of increasing \
-capability and cost.
+capability and cost. The smallest model was asked the question several times, \
+so its answers appear as A1, A2, A3.
 
 QUESTION:
 {prompt}
 
-ANSWER A (smallest model):
-{local}
+ANSWER A1 (smallest model):
+{local1}
+
+ANSWER A2 (smallest model):
+{local2}
+
+ANSWER A3 (smallest model):
+{local3}
 
 ANSWER B (mid model):
 {haiku}
@@ -89,10 +103,12 @@ ANSWER C (largest model):
 
 For each answer, decide whether it is ACCEPTABLE: factually correct, responsive \
 to the question, and complete enough to be useful. Judge only quality, not \
-length or style.
+length or style. Grade each of A1, A2 and A3 independently.
 
-Reply with exactly three lines and nothing else:
-A: ACCEPTABLE or UNACCEPTABLE
+Reply with exactly five lines and nothing else:
+A1: ACCEPTABLE or UNACCEPTABLE
+A2: ACCEPTABLE or UNACCEPTABLE
+A3: ACCEPTABLE or UNACCEPTABLE
 B: ACCEPTABLE or UNACCEPTABLE
 C: ACCEPTABLE or UNACCEPTABLE"""
 
@@ -132,7 +148,10 @@ def synthetic_labels(prompts: list[str], seed: int = 7) -> list[LabeledPrompt]:
     return rows
 
 
-async def judge(client, prompt: str, answers: dict[TierName, str]) -> dict[TierName, bool]:
+async def judge(
+    client, prompt: str, local_answers: list[str], haiku: str, sonnet: str
+) -> dict[TierName, bool]:
+    padded = (local_answers + ["(no answer)"] * LOCAL_SAMPLES)[:LOCAL_SAMPLES]
     message = await client.messages.create(
         model=JUDGE_MODEL,
         max_tokens=JUDGE_MAX_TOKENS,
@@ -142,9 +161,11 @@ async def judge(client, prompt: str, answers: dict[TierName, str]) -> dict[TierN
                 "role": "user",
                 "content": JUDGE_PROMPT.format(
                     prompt=prompt,
-                    local=answers[TierName.LOCAL][:2000],
-                    haiku=answers[TierName.HAIKU][:2000],
-                    sonnet=answers[TierName.SONNET][:2000],
+                    local1=padded[0][:JUDGE_CLIP_CHARS],
+                    local2=padded[1][:JUDGE_CLIP_CHARS],
+                    local3=padded[2][:JUDGE_CLIP_CHARS],
+                    haiku=haiku[:JUDGE_CLIP_CHARS],
+                    sonnet=sonnet[:JUDGE_CLIP_CHARS],
                 ),
             }
         ],
@@ -160,20 +181,42 @@ async def judge(client, prompt: str, answers: dict[TierName, str]) -> dict[TierN
             "Raise JUDGE_MAX_TOKENS or check JUDGE_THINKING."
         )
 
-    # Match on the A/B/C letter rather than line order. Positional parsing broke
-    # on any preamble or blank line, shifting every verdict by one.
-    verdicts: dict[TierName, bool] = {}
-    for letter, tier in zip("ABC", TIER_SEQUENCE, strict=True):
-        match = re.search(rf"^\s*{letter}\s*[:.\)-]\s*(\w+)", text, re.MULTILINE)
-        if match:
-            verdicts[tier] = match.group(1).upper().startswith("ACCEPT")
+    def verdict(marker: str) -> bool | None:
+        match = re.search(rf"^\s*{marker}\s*[:.\)-]\s*(\w+)", text, re.MULTILINE)
+        return match.group(1).upper().startswith("ACCEPT") if match else None
 
-    # A tier the judge did not rule on is treated as unacceptable: assuming
+    # Local passes on a majority of its samples, not on a single lucky draw.
+    votes = [verdict(f"A{i + 1}") for i in range(LOCAL_SAMPLES)]
+    passes = sum(1 for v in votes if v)
+    # A marker the judge did not rule on counts as unacceptable: assuming
     # success on a missing verdict would bias labels toward the cheap tier.
-    return {tier: verdicts.get(tier, False) for tier in TIER_SEQUENCE}
+    return {
+        TierName.LOCAL: passes * 2 > LOCAL_SAMPLES,
+        TierName.HAIKU: bool(verdict("B")),
+        TierName.SONNET: bool(verdict("C")),
+    }
 
 
 TIER_SEQUENCE = (TierName.LOCAL, TierName.HAIKU, TierName.SONNET)
+
+
+async def generate(
+    registry, tier: TierName, prompt: str, index: int, truncations: dict[str, int]
+) -> str:
+    """One answer from one tier. A failing tier yields an empty string rather
+    than ending the run -- one bad tier should not cost the whole dataset."""
+    try:
+        result = await registry.get(tier).complete(ANSWER_INSTRUCTION + prompt)
+        if result.truncated:
+            truncations[tier.value] += 1
+            print(
+                f"  [{index}] WARNING {tier.value} was truncated at "
+                f"{result.output_tokens} tokens; its answer will grade badly"
+            )
+        return result.text
+    except Exception as exc:  # noqa: BLE001 - one bad tier must not end the run
+        print(f"  [{index}] {tier.value} failed: {exc}")
+        return ""
 
 
 async def label_prompts(prompts: list[str], out: Path) -> list[LabeledPrompt]:
@@ -211,23 +254,15 @@ async def label_prompts(prompts: list[str], out: Path) -> list[LabeledPrompt]:
 
     try:
         for i, prompt in enumerate(todo, 1):
-            answers: dict[TierName, str] = {}
-            for tier in TIER_SEQUENCE:
-                try:
-                    result = await registry.get(tier).complete(ANSWER_INSTRUCTION + prompt)
-                    answers[tier] = result.text
-                    if result.truncated:
-                        truncations[tier.value] += 1
-                        print(
-                            f"  [{i}] WARNING {tier.value} was truncated at "
-                            f"{result.output_tokens} tokens; its answer will grade badly"
-                        )
-                except Exception as exc:  # noqa: BLE001 - one bad tier must not end the run
-                    answers[tier] = ""
-                    print(f"  [{i}] {tier.value} failed: {exc}")
+            local_answers = [
+                await generate(registry, TierName.LOCAL, prompt, i, truncations)
+                for _ in range(LOCAL_SAMPLES)
+            ]
+            haiku_answer = await generate(registry, TierName.HAIKU, prompt, i, truncations)
+            sonnet_answer = await generate(registry, TierName.SONNET, prompt, i, truncations)
 
             try:
-                verdicts = await judge(client, prompt, answers)
+                verdicts = await judge(client, prompt, local_answers, haiku_answer, sonnet_answer)
             except JudgeUnusable as exc:
                 print(f"\n  [{i}] JUDGE FAILED: {exc}")
                 print("  Stopping: continuing would record made-up labels.")
