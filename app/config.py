@@ -10,6 +10,16 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Docker Compose reads .env natively, but host-run tools -- the labeling run,
+# the trainer, pytest -- do not, so a key sitting in .env was invisible to
+# exactly the command that needs it most. Real environment variables still win:
+# load_dotenv does not override what is already set, which keeps the container's
+# injected config authoritative.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
 def _bool(name: str, default: bool) -> bool:
