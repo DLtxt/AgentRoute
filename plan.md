@@ -273,9 +273,13 @@ For command-line *tools* you run rather than import (`ruff`, `pytest`, `httpie`)
 
 ## Phase 3 — ML, tests, CI
 
-**Status: pipeline complete; the labeling run is still pending an API key.**
+**Status: pipeline complete and verified end to end on a paid subset; the full labeling run is still pending.**
 
-- **Build the labeled dataset by outcome, not intuition.** Collect ~300 prompts, run each through all three tiers, compare outputs, label each with *the cheapest tier that produced an acceptable answer*. This costs about $2.50 in API spend. Budget the *human* time honestly: 300 prompts × 3 tiers is 900 generations to read and adjudicate. That is the real cost of this step, and it is worth paying — it's the difference between a real dataset and a model trained to predict your own guesses. If you want to cut the reading down without cutting the dataset, have Sonnet pre-grade and hand-review only the disagreements.
+- **Build the labeled dataset by outcome, not intuition.** Collect ~300 prompts, run each through all three tiers, and label each with *the cheapest tier that produced an acceptable answer*. About $3.90 in API spend. This is the difference between a real dataset and a model trained to predict your own guesses — an intuition-labeled model only learns to reproduce the rule classifier, so comparing the two would measure nothing.
+
+  Acceptability is graded by Sonnet rather than by hand. Reading 900 generations yourself is the honest alternative and it is hours of work; the judge makes the run tractable, at the cost of inheriting the judge's opinion — including Sonnet grading its own output. Spot-check a sample either way.
+
+  **Two failure modes that cost real debugging time**, both of which mislabeled data silently rather than erroring. The judge must have thinking disabled: Sonnet 5 runs adaptive thinking by default, thinking tokens count against `max_tokens`, and grading three real answers consumed the entire budget and returned no text — which a naive parser reads as "every tier unacceptable". And answers must not be truncated: a reply cut off mid-sentence by `max_tokens` reads as wrong to any grader, so the labeling run needs its own generous budget plus a concision instruction applied identically to every tier. Watch the class balance too — if almost nothing lands on the expensive tier, the classifier cannot learn that class.
 - Train logistic regression as a baseline, then XGBoost. Same hand-crafted features. Report both confusion matrices — having the baseline is what makes the XGBoost choice defensible instead of decorative. **Print the held-out sample size next to the matrices**; with ~300 samples across 3 classes the test set is small enough that a narrow win may not be a real result, and saying so is the stronger answer.
 - Keep classifier selection behind `CLASSIFIER=rules|logreg|xgb` so all three are A/B-able at runtime
 - **Tests worth having** (all runnable in mock mode, no secrets):
@@ -518,10 +522,10 @@ Track from Phase 1 — these are both your debugging surface and your portfolio 
 
 | Item | Cost |
 |---|---|
-| Outcome-based labeling run (~300 prompts × 3 tiers) | ~$2.50 |
+| Outcome-based labeling run (~300 prompts × 3 tiers, incl. judge) | ~$3.90 |
 | Development and manual testing | ~$3–5 (less if you default to mock mode) |
 | Docker, Redis, Ollama, kind, KEDA, GitHub Actions, GHCR | $0 |
-| **Total through Phase 4** | **~$6–8** |
+| **Total through Phase 4** | **~$7–9** |
 | Cloud cluster, appendix only (2 nodes, ~4–6 hours) | ~$1–3 |
 
 Everything through Phase 4 — including autoscaling — costs nothing but the API spend. The cluster is the only line item that needs a credit card, and it's optional.

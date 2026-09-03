@@ -149,13 +149,20 @@ Without either, the gateway falls back to rules and logs a warning — a fresh c
 The real dataset comes from running every prompt through every tier and labeling each with *the cheapest tier that produced an acceptable answer* — a judgment made by outcome, not by intuition. A model trained on intuition labels only learns to reproduce the rule classifier, so comparing the two would measure nothing.
 
 ```bash
-python -m app.classifier.label --dry-run    # cost estimate: ~$2.82 for 300 prompts
+python -m app.classifier.label --dry-run    # cost estimate: ~$3.90 for 300 prompts
 python -m app.classifier.label --limit 20   # cheap real subset first
 python -m app.classifier.label              # the full run
 python -m app.classifier.train              # retrain on real labels
 ```
 
-Needs `ANTHROPIC_API_KEY` and `MOCK_TIERS=false`. Progress checkpoints after every prompt, so an interrupted run resumes rather than re-spending.
+Needs `ANTHROPIC_API_KEY` and `MOCK_TIERS=false`. Progress checkpoints after every prompt, so an interrupted run resumes rather than re-spending; `--fresh` discards and starts over.
+
+Acceptability is graded by Sonnet rather than by hand, which is what makes 300 prompts × 3 tiers tractable — the alternative is reading 900 generations. It is a real shortcut with a real cost: the judge is Sonnet grading Sonnet's output among others, so spot-check a sample of rows before trusting the labels.
+
+Two things that made this harder than it looks, both worth knowing before changing the code:
+
+- **The judge must have thinking disabled.** Sonnet 5 runs adaptive thinking by default and thinking tokens count against `max_tokens`; grading three real answers consumed the whole budget and returned *no text*, which the parser read as "every tier unacceptable" and skipped the prompt. It now raises instead of silently mislabeling.
+- **Answers must not be truncated.** A reply cut off mid-sentence by `max_tokens` reads as wrong to any grader. The run uses its own larger budget and asks every tier for a concise answer, identically, so the comparison stays fair. Thinking stays *on* for the answering tiers, since disabling it would understate the capability being measured. Truncations are counted and reported.
 
 ## Gateway auth
 

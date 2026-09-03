@@ -107,6 +107,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Docker requires lowercase repository names, but github.repository
+      # preserves the case of the GitHub repo -- "DLtxt/AI-router" here -- so
+      # using it directly fails with "repository name must be lowercase".
+      - name: Lowercase the image name
+        id: image
+        run: |
+          echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       # Multi-arch because the images are built on x86 CI but developed on
       # Apple Silicon. Skipping this is how you get `exec format error` on a
       # cloud node with no obvious explanation.
@@ -117,7 +125,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ steps.image.outputs.name }}:${{ github.sha }}
+            ghcr.io/${{ steps.image.outputs.name }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
