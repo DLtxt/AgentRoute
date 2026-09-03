@@ -183,7 +183,7 @@ The hard band deliberately favours prompts demanding a *checkable* artifact — 
 
 **Inspection** (`app/classifier/inspect.py`) — reports class balance, distinct feature vectors, conflicting rows, and the achievable ceiling, warning when a class is absent or under 10% and when many rows share features but disagree on the label. `--show N` prints the full evidence behind one label; `--conflicts` lists groups of identical features with disagreeing labels; `--samples` and `--label` filter the rows.
 
-**Training** (`app/classifier/train.py`) — logistic regression as the baseline, then XGBoost, on the same features and the same split. Reports both confusion matrices with the held-out sample size, feature importance, and each model's accuracy against the majority-class baseline and the achievable ceiling. Warns when a class has no held-out examples, since an empty confusion row means there was nothing to predict rather than that the model got it wrong. The gap between the two models is compared against the standard error of the difference rather than a fixed threshold, which does not scale with sample size. `--balanced` applies inverse-frequency class weights. Models and metrics are written to `models/`.
+**Training** (`app/classifier/train.py`) — logistic regression as the baseline, then XGBoost, on the same features and the same split. Reports both confusion matrices with the held-out sample size, feature importance, and each model's accuracy against the majority-class baseline and the achievable ceiling. Warns when a class has no held-out examples, since an empty confusion row means there was nothing to predict rather than that the model got it wrong. The gap between the three models is compared against the standard error of the difference rather than a fixed threshold, which does not scale with sample size. `--balanced` applies inverse-frequency class weights. Models and metrics are written to `models/`.
 
 **Current results** (147 outcome-labeled prompts, 110 train / 37 test):
 
@@ -193,8 +193,6 @@ The hard band deliberately favours prompts demanding a *checkable* artifact — 
 | XGBoost | 0.730 | +0.097 |
 
 Both beat a constant prediction. The 0.081 gap between them is three samples against a 95% interval of ±0.191, so neither is the winner.
-
-**The dataset is two-class in practice.** Only 3 of 147 rows are labeled `sonnet` (2.0%). Extending the hard band with eighteen prompts demanding a checkable artifact — code that must compile, algebra that must hold — moved that count by exactly one: Haiku 4.5 answered ten of the twelve new prompts acceptably, and the local tier answered one. The tier boundary is not where prompt difficulty was expected to put it.
 
 What this measures is a property of the grading rubric as much as of the models. "Cheapest acceptable tier" depends on what *acceptable* means, and the judge asks for an answer that is factually correct, responsive, and complete enough to be useful. Haiku clears that bar on nearly everything in this corpus. A stricter rubric — must compile, every proof step justified — would move the boundary and produce more `sonnet` labels at a higher quality threshold. Neither rubric is wrong; the routing boundary is a product decision about quality, and this dataset records one particular choice.
 

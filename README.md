@@ -2,7 +2,7 @@
 
 A cost-aware LLM request router. It classifies each incoming query and dispatches it to the cheapest model tier that can handle it, with response caching, a hand-built load balancer, capability guardrails, authentication, and rate limiting.
 
-Everything runs locally, on Docker Compose or on a local Kubernetes cluster with autoscaling. See [`plan.md`](plan.md) for what is implemented.
+You can run it locally, or on cloud. On Docker Compose or on a local Kubernetes cluster with autoscaling. See [`plan.md`](plan.md) for what is implemented.
 
 ---
 
