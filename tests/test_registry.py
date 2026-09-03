@@ -26,6 +26,11 @@ def settings(**overrides) -> Settings:
     get_settings.cache_clear()
     base = get_settings()
     get_settings.cache_clear()
+    # Neutralise anything a developer's local .env could inject. Since config
+    # started loading .env, a real key on disk silently changed what these
+    # tests exercised -- passing in CI and failing locally, or worse the
+    # reverse. Tests that want credentials set them explicitly.
+    base = replace(base, anthropic_api_key=None, gateway_api_keys="")
     return replace(base, **overrides)
 
 

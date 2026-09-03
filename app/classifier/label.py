@@ -131,10 +131,21 @@ async def label_prompts(prompts: list[str], out: Path) -> list[LabeledPrompt]:
     registry = build_registry(settings)
     client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
-    done = {r.prompt for r in read_dataset(out)} if out.exists() else set()
-    rows = list(read_dataset(out)) if out.exists() else []
+    existing = read_dataset(out) if out.exists() else []
+    # Only real labels count as done. Synthetic rows are placeholders written to
+    # exercise the pipeline, and treating them as completed work is exactly
+    # backwards -- a real run exists to replace them.
+    rows = [r for r in existing if r.source == "outcome"]
+    discarded = len(existing) - len(rows)
+    if discarded:
+        print(f"Discarding {discarded} synthetic placeholder rows.")
+
+    done = {r.prompt for r in rows}
     todo = [p for p in prompts if p not in done]
-    print(f"{len(done)} already labeled, {len(todo)} to go")
+    print(f"{len(done)} real labels already present, {len(todo)} to go")
+    if not todo:
+        print("Nothing to do.")
+        return rows
 
     try:
         for i, prompt in enumerate(todo, 1):
@@ -167,6 +178,11 @@ def main() -> None:
     parser.add_argument("--synthetic", action="store_true", help="Fake labels, no API calls.")
     parser.add_argument("--dry-run", action="store_true", help="Estimate cost and exit.")
     parser.add_argument("--out", type=Path, default=LABELED_PATH)
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Discard existing labels and start over, instead of resuming.",
+    )
     args = parser.parse_args()
 
     prompts = build_corpus(args.size)
@@ -185,6 +201,9 @@ def main() -> None:
         print("These are not real labels. Re-run without --synthetic before trusting a model.")
         return
 
+    if args.fresh and args.out.exists():
+        args.out.unlink()
+        print(f"Removed {args.out}; starting fresh.")
     asyncio.run(label_prompts(prompts, args.out))
 
 
