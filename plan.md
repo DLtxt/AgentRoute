@@ -236,6 +236,7 @@ Manifests under `k8s/`, applied with Kustomize. `kind-config.yaml` defines a thr
 | `balancer` Deployment + Service | Two replicas, so the tier in front of an autoscaling backend is not itself a single point of failure |
 | `balancer-nodeport` | Local overlay only; kind maps host 8000 to node port 30080 |
 | `balancer-public` | Cloud overlay only; `LoadBalancer` Service |
+| `pathbench` Job | `k8s/bench/`, on demand; runs the load driver in-cluster to compare the two paths |
 | `router-config` ConfigMap | Non-secret configuration |
 | `router-secrets` Secret | Only `ANTHROPIC_API_KEY` and `GATEWAY_API_KEYS` |
 

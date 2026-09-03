@@ -1,0 +1,37 @@
+# Load generator that runs *inside* the cluster.
+#
+# Running it from the host would need kubectl port-forward to reach
+# gateway-direct, which is a ClusterIP with no host route -- and port-forward is
+# a single-connection userspace proxy that becomes the bottleneck well below the
+# concurrency this test needs. In-cluster, both paths are plain Service DNS on
+# the same network, so the only variable is what sits in front of the pods.
+#
+# TARGET is patched per run:
+#   http://balancer:8080        -> the custom balancer
+#   http://gateway-direct:8000  -> a plain Kubernetes Service
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pathbench
+spec:
+  parallelism: 3
+  completions: 3
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: driver
+          image: ai-router-gateway:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/bench/driver.py"]
+          args: ["--host", "TARGET", "--duration", "75", "--concurrency", "40"]
+          volumeMounts:
+            - {name: bench, mountPath: /bench}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 256Mi}
+      volumes:
+        - name: bench
+          configMap: {name: load-driver}
