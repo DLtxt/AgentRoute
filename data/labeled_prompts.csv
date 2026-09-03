@@ -140,3 +140,80 @@ Explain what a race condition is and give an example that a unit test would not 
 Implement a function that computes the Levenshtein distance between two strings.,local,outcome,
 "Describe the difference between blue-green and canary deployment, and when each is preferable.",haiku,outcome,
 "Explain what happens when a Kubernetes readiness probe fails, versus a liveness probe.",haiku,outcome,
+Write a shell one-liner that finds the ten largest files under a directory.,local,outcome,
+"```python
+class RateLimiter:
+    def allow(self, key: str, now: float) -> bool:
+        ...
+```
+Implement a sliding-window rate limiter for this signature. Prove the window is exact rather than approximate, and give the memory bound per key.",haiku,outcome,
+"```python
+def lru_cache_with_ttl(capacity: int, ttl: float):
+    ...
+```
+Implement this with O(1) get and put including expiry. Prove that an expired entry is never returned, and state what happens when capacity and expiry conflict.",haiku,outcome,
+"```go
+func Pipeline(ctx context.Context, in <-chan int) <-chan int {
+	return nil
+}
+```
+Implement a cancellable pipeline stage. Prove no goroutine outlives the context, and explain the exact ordering guarantee on close.",haiku,outcome,
+"```python
+def merge_intervals(intervals):
+    ...
+```
+Implement this correctly for touching, nested, and zero-length intervals. Give the invariant your loop maintains and prove it holds at every step.",haiku,outcome,
+"```sql
+-- orders(id, customer_id, amount, created_at, status)
+```
+Write a query returning each customer's second-largest completed order, with no window functions. Prove it is correct when a customer has ties or fewer than two orders.",haiku,outcome,
+"```go
+type Semaphore struct{}
+func (s *Semaphore) Acquire(ctx context.Context) error { return nil }
+```
+Implement a weighted semaphore honouring context cancellation. Prove a cancelled waiter cannot leave the count corrupted.",sonnet,outcome,
+"```python
+def binary_search_rotated(nums, target):
+    ...
+```
+Implement search on a rotated sorted array with duplicates. Prove the worst case is O(n) rather than O(log n) and identify exactly which input forces it.",haiku,outcome,
+"Derive the expected number of comparisons for randomized quickselect and prove it is linear, then show precisely where an argument that only bounds the recursion depth is insufficient.",haiku,outcome,
+"```python
+def debounce(fn, wait: float):
+    ...
+```
+Implement a thread-safe debounce decorator. Prove that concurrent calls cannot schedule two overlapping invocations, and say what your lock does not protect.",haiku,outcome,
+"Prove that a lock-free single-producer single-consumer ring buffer is correct with only acquire/release ordering, and identify the exact operation that would break under relaxed ordering.",haiku,outcome,
+"```python
+def parse_semver(text: str) -> tuple:
+    ...
+```
+Implement a parser accepting prerelease and build metadata per the specification, rejecting malformed input. Give three inputs a naive regex would wrongly accept.",haiku,outcome,
+"```go
+func Retry(ctx context.Context, attempts int, f func() error) error {
+	return nil
+}
+```
+Implement retry with exponential backoff and jitter. Prove total elapsed time is bounded, and explain why the naive implementation can exceed the deadline.",haiku,outcome,
+"Derive the false-positive rate of a counting Bloom filter with 4-bit counters, and prove where it diverges from the standard Bloom filter bound once counters saturate.",haiku,outcome,
+"```python
+def consistent_hash_ring(nodes, replicas: int):
+    ...
+```
+Implement a consistent hash ring with virtual nodes. Prove the fraction of keys remapped when one node leaves, and state the assumption that proof depends on.",haiku,outcome,
+"```python
+def reservoir_sample(stream, k: int):
+    ...
+```
+Implement reservoir sampling and prove every element ends up with probability exactly k/n, being explicit about the induction step.",haiku,outcome,
+"```go
+func WorkerPool(jobs <-chan Job, n int) <-chan Result {
+	return nil
+}
+```
+Implement a worker pool that propagates panics as errors without killing the pool. Prove no result is lost and no goroutine leaks.",haiku,outcome,
+"```python
+def median_of_two_sorted(a, b):
+    ...
+```
+Implement this in O(log(min(m,n))). Prove your partition invariant, and give the edge case that breaks a solution which only handles equal-length inputs.",haiku,outcome,

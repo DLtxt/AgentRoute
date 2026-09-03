@@ -202,7 +202,7 @@ python -m app.classifier.train --balanced    # inverse-frequency class weights
 
 The run checkpoints after every prompt and resumes if interrupted. `--fresh` discards existing labels and starts over. `--synthetic` writes placeholder labels with no API calls, for exercising the pipeline.
 
-`train.py` prints the majority-class baseline and the achievable ceiling next to each model's accuracy, warns when a class has no held-out examples, and compares the two models against the standard error rather than a fixed threshold.
+`train.py` prints the majority-class baseline and the achievable ceiling next to each model's accuracy, warns when a class has no held-out examples, and compares the three models against the standard error rather than a fixed threshold.
 
 ### Checking a labeling run
 
@@ -280,6 +280,104 @@ curl -s localhost:8000/stats | jq '[.replicas[] | {url, requests}]'
 ```bash
 make kind-down
 ```
+
+---
+
+## Deploying to a cloud cluster
+
+Optional. Nothing in the project requires it — everything above, autoscaling included, runs locally. This is for running it on infrastructure you do not own.
+
+**Set a billing alert before provisioning anything.** Two small nodes cost roughly $0.08/hour, so a few hours of work is well under $1, but an idle cluster left running is the way this becomes expensive.
+
+### 1. Publish images to a registry
+
+Cloud nodes cannot see your local Docker daemon, so `kind load` has no equivalent. CI already pushes multi-arch images to GHCR on every push to `main`; make the package public in your GitHub package settings, or create an `imagePullSecret`.
+
+To push by hand:
+
+```bash
+OWNER=$(echo "$GITHUB_USER" | tr '[:upper:]' '[:lower:]')   # Docker rejects uppercase
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USER" --password-stdin
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t "ghcr.io/$OWNER/ai-router:latest" --push .
+```
+
+`--platform` matters. Build only for your Apple Silicon machine and the image fails on x86 nodes with `exec format error`, which does not name the cause.
+
+### 2. Provision a cluster
+
+Either provider works; two nodes is enough.
+
+```bash
+# Google Cloud — zonal Standard, whose control plane is covered by the free tier
+gcloud container clusters create ai-router \
+  --zone us-central1-a --num-nodes 2 --machine-type e2-small
+gcloud container clusters get-credentials ai-router --zone us-central1-a
+
+# DigitalOcean
+doctl kubernetes cluster create ai-router --count 2 --size s-2vcpu-2gb
+```
+
+Confirm you are pointed at the right cluster before applying anything:
+
+```bash
+kubectl config current-context
+```
+
+### 3. Point the overlay at your registry
+
+Edit `k8s/overlays/cloud/kustomization.yaml` and replace `OWNER` with your GitHub account, lowercased.
+
+### 4. Secrets, manifests, KEDA
+
+```bash
+make k8s-secret                          # only ANTHROPIC_API_KEY and GATEWAY_API_KEYS
+kubectl apply -k k8s/overlays/cloud
+helm repo add kedacore https://kedacore.github.io/charts && helm repo update
+helm upgrade --install keda kedacore/keda -n keda --create-namespace --wait
+kubectl apply -f k8s/keda/scaledobject.yaml
+```
+
+### 5. Verify
+
+```bash
+kubectl get svc balancer-public -w        # wait for EXTERNAL-IP
+IP=$(kubectl get svc balancer-public -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+curl -s "http://$IP/readyz"
+curl -s -X POST "http://$IP/query" -H 'content-type: application/json' \
+  -d '{"prompt":"What is the capital of France?"}'
+python load/driver.py --host "http://$IP" --duration 120 --concurrency 40
+```
+
+**Set `GATEWAY_API_KEYS` before exposing anything.** The moment the balancer has a public address, your Anthropic key sits behind an internet-facing endpoint, and scanners find open endpoints quickly. The API key check and the rate limit are what stand between you and someone else's inference bill.
+
+### 6. Tear down
+
+```bash
+kubectl delete -k k8s/overlays/cloud
+gcloud container clusters delete ai-router --zone us-central1-a    # or:
+doctl kubernetes cluster delete ai-router
+```
+
+Then check the billing console. A deleted cluster can leave a load balancer or disk behind, and those keep charging.
+
+### What differs from local
+
+| Concern | Local (`kind`) | Cloud |
+|---|---|---|
+| Entry point | NodePort, kind maps host 8000 | `LoadBalancer` Service, provider assigns an IP |
+| Images | `kind load docker-image` | Pulled from GHCR |
+| Ollama | Host, via `host.docker.internal` | No host Ollama; the cloud overlay sets `MOCK_TIERS=true` |
+| Secrets | `make k8s-secret` from `.env` | Same command, or your provider's secret manager |
+
+Everything else — Deployments, probes, resource limits, the ConfigMap, the headless Service, and the KEDA `ScaledObject` — is shared with the local overlay and unchanged.
+
+### Likely problems
+
+- **`exec format error`** — the image is not multi-arch. Rebuild with `--platform`.
+- **`ImagePullBackOff`** — the GHCR package is private. Make it public or add an `imagePullSecret`.
+- **`OOMKilled`** — the memory limits in `k8s/base/` suit a laptop; small cloud nodes are tighter.
+- **`EXTERNAL-IP` stuck at `<pending>`** — usually a quota problem. `kubectl describe svc balancer-public` says which.
 
 ## Load testing
 

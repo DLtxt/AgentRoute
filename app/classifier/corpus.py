@@ -148,6 +148,30 @@ HARD = [
     "Critique the practice of using UUIDv4 as a clustered primary key at scale, then say when it is nonetheless the right choice.",
     "Explain the difference between a memory barrier and a compiler barrier, and give a concrete bug that needs each.",
     "Design a strategy for testing a distributed system's behaviour under partition without a full chaos-engineering platform.",
+    # Prompts demanding a *checkable* artifact. Measured: the mid tier writes
+    # convincing prose but produces concrete errors when the answer must
+    # compile, the algebra must hold, or the proof must follow from the code it
+    # just wrote -- one answer called wg.WaitGroup() instead of wg.Wait(),
+    # another derived T(n) = T(n-1) + O(1) and claimed O(n log n) from it.
+    # Prose-only hard prompts do not separate the tiers; these do.
+    "```python\nclass RateLimiter:\n    def allow(self, key: str, now: float) -> bool:\n        ...\n```\nImplement a sliding-window rate limiter for this signature. Prove the window is exact rather than approximate, and give the memory bound per key.",
+    "```python\ndef lru_cache_with_ttl(capacity: int, ttl: float):\n    ...\n```\nImplement this with O(1) get and put including expiry. Prove that an expired entry is never returned, and state what happens when capacity and expiry conflict.",
+    "```go\nfunc Pipeline(ctx context.Context, in <-chan int) <-chan int {\n\treturn nil\n}\n```\nImplement a cancellable pipeline stage. Prove no goroutine outlives the context, and explain the exact ordering guarantee on close.",
+    "```python\ndef merge_intervals(intervals):\n    ...\n```\nImplement this correctly for touching, nested, and zero-length intervals. Give the invariant your loop maintains and prove it holds at every step.",
+    "```sql\n-- orders(id, customer_id, amount, created_at, status)\n```\nWrite a query returning each customer's second-largest completed order, with no window functions. Prove it is correct when a customer has ties or fewer than two orders.",
+    "```python\ndef topological_sort(graph):\n    ...\n```\nImplement this so it detects cycles rather than looping forever. Prove your cycle detection is complete, and state the complexity in terms of vertices and edges.",
+    "```go\ntype Semaphore struct{}\nfunc (s *Semaphore) Acquire(ctx context.Context) error { return nil }\n```\nImplement a weighted semaphore honouring context cancellation. Prove a cancelled waiter cannot leave the count corrupted.",
+    "```python\ndef binary_search_rotated(nums, target):\n    ...\n```\nImplement search on a rotated sorted array with duplicates. Prove the worst case is O(n) rather than O(log n) and identify exactly which input forces it.",
+    "Derive the expected number of comparisons for randomized quickselect and prove it is linear, then show precisely where an argument that only bounds the recursion depth is insufficient.",
+    "```python\ndef debounce(fn, wait: float):\n    ...\n```\nImplement a thread-safe debounce decorator. Prove that concurrent calls cannot schedule two overlapping invocations, and say what your lock does not protect.",
+    "Prove that a lock-free single-producer single-consumer ring buffer is correct with only acquire/release ordering, and identify the exact operation that would break under relaxed ordering.",
+    "```python\ndef parse_semver(text: str) -> tuple:\n    ...\n```\nImplement a parser accepting prerelease and build metadata per the specification, rejecting malformed input. Give three inputs a naive regex would wrongly accept.",
+    "```go\nfunc Retry(ctx context.Context, attempts int, f func() error) error {\n\treturn nil\n}\n```\nImplement retry with exponential backoff and jitter. Prove total elapsed time is bounded, and explain why the naive implementation can exceed the deadline.",
+    "Derive the false-positive rate of a counting Bloom filter with 4-bit counters, and prove where it diverges from the standard Bloom filter bound once counters saturate.",
+    "```python\ndef consistent_hash_ring(nodes, replicas: int):\n    ...\n```\nImplement a consistent hash ring with virtual nodes. Prove the fraction of keys remapped when one node leaves, and state the assumption that proof depends on.",
+    "```python\ndef reservoir_sample(stream, k: int):\n    ...\n```\nImplement reservoir sampling and prove every element ends up with probability exactly k/n, being explicit about the induction step.",
+    "```go\nfunc WorkerPool(jobs <-chan Job, n int) <-chan Result {\n\treturn nil\n}\n```\nImplement a worker pool that propagates panics as errors without killing the pool. Prove no result is lost and no goroutine leaks.",
+    "```python\ndef median_of_two_sorted(a, b):\n    ...\n```\nImplement this in O(log(min(m,n))). Prove your partition invariant, and give the edge case that breaks a solution which only handles equal-length inputs.",
 ]
 
 

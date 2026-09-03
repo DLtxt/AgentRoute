@@ -169,7 +169,9 @@ Cache hits are authorized too, against the tier recorded on the entry.
 
 ## Dataset and training
 
-**Corpus** (`app/classifier/corpus.py`) — 130 curated prompts across three difficulty bands, interleaved so any prefix stays balanced. Curated rather than template-generated: template fills produced prompts differing by a single noun, 69% of which shared an identical feature vector with another prompt. The curated set is at 19%.
+**Corpus** (`app/classifier/corpus.py`) — 148 curated prompts across three difficulty bands, interleaved so any prefix stays balanced. Curated rather than template-generated: template fills produced prompts differing by a single noun, 69% of which shared an identical feature vector with another prompt. The curated set is at 17%.
+
+The hard band deliberately favours prompts demanding a *checkable* artifact — code that must compile, algebra that must hold, a proof that must follow from the code just written. Prose-difficulty prompts do not separate the tiers: the mid tier answered "prove the halting problem is undecidable" and "critique the claim that microservices improve reliability" acceptably, and the local tier handled the second. It fails where the answer can be verified, producing `wg.WaitGroup()` instead of `wg.Wait()`, or deriving `T(n) = T(n-1) + O(1)` and concluding O(n log n) from it. Selecting for that boundary is what makes the top tier appear in the labels at all; it also means the class balance reflects corpus design rather than representative traffic.
 
 **Labeling** (`app/classifier/label.py`) — each prompt is answered by every tier and labeled with the cheapest tier that produced an acceptable answer, judged by Sonnet. Around $1.69 for the full corpus.
 
@@ -183,16 +185,20 @@ Cache hits are authorized too, against the tier recorded on the entry.
 
 **Training** (`app/classifier/train.py`) — logistic regression as the baseline, then XGBoost, on the same features and the same split. Reports both confusion matrices with the held-out sample size, feature importance, and each model's accuracy against the majority-class baseline and the achievable ceiling. Warns when a class has no held-out examples, since an empty confusion row means there was nothing to predict rather than that the model got it wrong. The gap between the two models is compared against the standard error of the difference rather than a fixed threshold, which does not scale with sample size. `--balanced` applies inverse-frequency class weights. Models and metrics are written to `models/`.
 
-**Current results** (129 outcome-labeled prompts, 96 train / 33 test):
+**Current results** (147 outcome-labeled prompts, 110 train / 37 test):
 
-| | accuracy | vs. baseline 0.597 |
+| | accuracy | vs. baseline 0.633 |
 |---|---|---|
-| logistic regression | 0.788 | +0.191 |
-| XGBoost | 0.727 | +0.130 |
+| logistic regression | 0.811 | +0.178 |
+| XGBoost | 0.730 | +0.097 |
 
-Both beat a constant prediction. The 0.061 gap between them is two samples against a 95% interval of ±0.206, so neither is the winner.
+Both beat a constant prediction. The 0.081 gap between them is three samples against a 95% interval of ±0.191, so neither is the winner.
 
-Two limitations. The dataset holds only two `sonnet` rows (1.6%) and none reach the held-out set, so this is a two-class result whatever the label set says — the outcome labels say Haiku 4.5 handles nearly everything the corpus contains. And `approx_tokens` is `char_length // 4` in 129 of 129 rows, perfectly collinear, which is why its importance is exactly zero.
+**The dataset is two-class in practice.** Only 3 of 147 rows are labeled `sonnet` (2.0%). Extending the hard band with eighteen prompts demanding a checkable artifact — code that must compile, algebra that must hold — moved that count by exactly one: Haiku 4.5 answered ten of the twelve new prompts acceptably, and the local tier answered one. The tier boundary is not where prompt difficulty was expected to put it.
+
+What this measures is a property of the grading rubric as much as of the models. "Cheapest acceptable tier" depends on what *acceptable* means, and the judge asks for an answer that is factually correct, responsive, and complete enough to be useful. Haiku clears that bar on nearly everything in this corpus. A stricter rubric — must compile, every proof step justified — would move the boundary and produce more `sonnet` labels at a higher quality threshold. Neither rubric is wrong; the routing boundary is a product decision about quality, and this dataset records one particular choice.
+
+`approx_tokens` is `char_length // 4` in every row, perfectly collinear, which is why its importance is exactly zero.
 
 ---
 
@@ -231,6 +237,7 @@ Manifests under `k8s/`, applied with Kustomize. `kind-config.yaml` defines a thr
 | `gateway-direct` Service | Ordinary ClusterIP over the same pods, for comparison |
 | `balancer` Deployment + Service | Two replicas, so the tier in front of an autoscaling backend is not itself a single point of failure |
 | `balancer-nodeport` | Local overlay only; kind maps host 8000 to node port 30080 |
+| `balancer-public` | Cloud overlay only; `LoadBalancer` Service |
 | `router-config` ConfigMap | Non-secret configuration |
 | `router-secrets` Secret | Only `ANTHROPIC_API_KEY` and `GATEWAY_API_KEYS` |
 
@@ -241,6 +248,8 @@ The Secret carries only the two secret keys. Building it with `--from-env-file=.
 Probes reuse the endpoints the custom balancer already polls: `/healthz` for liveness, `/readyz` for readiness. Every pod carries resource requests and memory limits.
 
 Images are side-loaded with `kind load docker-image`, since kind nodes cannot see the host's Docker daemon.
+
+Two overlays share the base. `overlays/local` adds the NodePort kind maps a host port to; `overlays/cloud` swaps it for a `LoadBalancer` Service, rewrites image references to a registry, and forces `MOCK_TIERS=true` because a cloud node has no host Ollama to reach. Everything else — Deployments, probes, resource limits, ConfigMap, Secret, the headless Service, the `ScaledObject` — is shared and not repeated.
 
 ---
 
@@ -307,6 +316,6 @@ Images are built multi-arch (`linux/amd64,linux/arm64`) in CI, since development
 
 ## Not built
 
-**Cloud deployment** — provisioning, cloud overlay, teardown.
+**Cloud deployment** — the `overlays/cloud` manifests exist and build, and README documents the full procedure, but the project has never been applied to a real cloud cluster. Provisioning, the load-balancer address, and image pulls from a registry are untested.
 
 **Not planned** — multi-agent orchestration, a hand-built Redis, consistent hashing (there are no sessions), external tracing, a service mesh.

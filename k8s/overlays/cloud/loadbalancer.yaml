@@ -1,0 +1,15 @@
+# Cloud entry point. The local overlay uses a NodePort because kind maps a host
+# port to it; a real cluster asks the provider for an external address instead.
+# This is the whole difference in how traffic arrives -- the Deployments,
+# probes, ConfigMap, Secret and ScaledObject are shared with the local overlay
+# and are not repeated here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: balancer-public
+spec:
+  type: LoadBalancer
+  selector: {app: balancer}
+  ports:
+    - port: 80
+      targetPort: 8080
