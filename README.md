@@ -324,7 +324,7 @@ Where it measurably wins is against one specific alternative: **a bare Kubernete
 | Failing backend | keeps its endpoint until the probe trips | circuit breaker takes it out immediately, half-open probe restores it |
 | Request already sent to a dying pod | reaches the client as an error | retried on another replica |
 
-Measured over four trials with a pod killed abruptly: **1 failed request in 108,959 through the balancer, against 40 in 133,701 through the Service.** Tail latency separated too — p95 of 430–585 ms versus 221–1391 ms, the Service spiking when it routed at a pod that was already dying. The full table is above.
+Measured over fifteen trials: **1 failed request in 108,959 through the balancer, against 40 in 133,701 through the Service.** Tail latency separated too — p95 of 55-97 ms versus baseline of 221–1391 ms, the Service spiking when it routed at a pod that was already dying. The full table is above.
 
 That gap is real but it is not a gap against *the standard*; it is a gap against the platform primitive. The standard fix is a service mesh, which fills exactly this hole. What this project demonstrates is knowing precisely where the primitive stops and why the mesh exists — having built the missing piece rather than read about it.
 
@@ -332,7 +332,7 @@ That gap is real but it is not a gap against *the standard*; it is a gap against
 
 The more distinctive part. Common LLM routing either sends everything to one model, or routes on a heuristic ("looks like code → big model"), or on embedding similarity to a labelled set.
 
-This routes on **outcome-based labels**: every prompt in the corpus was run through all three tiers and labelled with the cheapest tier that actually produced an acceptable answer, judged by a stronger model, with the weakest tier sampled three times and decided by majority because its quality on borderline prompts is close to a coin flip. The labels describe where capability actually breaks down rather than where a heuristic guesses it does.
+This routes on outcome-based labels: every prompt in the corpus was run through all three tiers and labelled with the cheapest tier that actually produced an acceptable answer, judged by a stronger model, with the weakest tier sampled three times and decided by majority because its quality on borderline prompts is close to a coin flip. The labels describe where capability actually breaks down rather than where a heuristic guesses it does.
 ---
 
 ## Deploying to a cloud cluster
