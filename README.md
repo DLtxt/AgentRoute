@@ -330,9 +330,8 @@ That gap is real but it is not a gap against *the standard*; it is a gap against
 
 ### The router
 
-The more distinctive part. Common LLM routing either sends everything to one model, or routes on a heuristic ("looks like code → big model"), or on embedding similarity to a labelled set.
+The more distinctive part. Common LLM routing either sends everything to one model, or routes on a heuristic ("looks like code → big model"), or on embedding similarity to a labelled set. This routes on outcome-based labels: every prompt in the corpus was run through all three tiers and labelled with the cheapest tier that actually produced an acceptable answer, judged by a stronger model, with the weakest tier sampled three times and decided by majority because its quality on borderline prompts is close to a coin flip. The labels describe where capability actually breaks down rather than where a heuristic guesses it does.
 
-This routes on outcome-based labels: every prompt in the corpus was run through all three tiers and labelled with the cheapest tier that actually produced an acceptable answer, judged by a stronger model, with the weakest tier sampled three times and decided by majority because its quality on borderline prompts is close to a coin flip. The labels describe where capability actually breaks down rather than where a heuristic guesses it does.
 ---
 
 ## Deploying to a cloud cluster
